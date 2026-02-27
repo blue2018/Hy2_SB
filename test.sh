@@ -811,22 +811,8 @@ rc_ulimit="-n 1000000"
 rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
-start_pre() { 
-    # 【优化2】 解决 "bind: address already in use" 顽疾
-    # 在启动前强制清理旧进程，确保端口 13679 能够被 Hy2 成功绑定
-    pkill -9 sing-box >/dev/null 2>&1 || true
-    /usr/bin/sing-box check -c /etc/sing-box/config.json || return 1 
-}
-
-start_post() {
-    # 【优化3】 逻辑防火墙 - 彻底解决非必装组件拖垮主服务的问题
-    # 只要不满足条件就直接 return 0 退出，不会解析后续可能导致语法错误的变量内容
-    [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] || return 0
-    
-    pkill -9 cloudflared >/dev/null 2>&1 || true
-    # 使用引号包裹变量，并确保 & 后面没有分号
-    nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 &
-}
+start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json || return 1; }
+start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1; nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & } || return 0; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
