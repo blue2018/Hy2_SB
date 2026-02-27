@@ -857,10 +857,8 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload >/dev/null 2>&1
         systemctl enable sing-box >/dev/null 2>&1 || true
-        sync   # 确保环境文件与服务配置落盘
-		(systemctl restart sing-box >/dev/null 2>&1 || true) &
-    fi
-	set +e
+        sync; (systemctl restart sing-box >/dev/null 2>&1 || true) &
+    fi; set +e
 	for i in {1..40}; do
         pid=$(pgrep -x "sing-box" 2>/dev/null | head -n 1)
         [ -z "${pid}" ] && pid=$(pgrep -f "sing-box run" | awk '{print $1}' | head -n 1)
@@ -878,7 +876,6 @@ EOF
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd") | crontab -
 	    eval "$cf_cmd"
 	fi
-	
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
         succ "sing-box 启动成功 | 总内存: ${mem_total:-N/A} MB | 可用: $(( ${ma:-0} / 1024 )) MB | 模式: $([[ "$INITCWND_DONE" == "true" ]] && echo "内核" || echo "应用层")"
@@ -886,10 +883,8 @@ EOF
         err "服务拉起超时，请检查日志："
         [ "$OS" = "alpine" ] && { [ -f /var/log/messages ] && tail -n 10 /var/log/messages || logread | tail -n 10; } || journalctl -u sing-box -n 10 --no-pager 2>/dev/null
         set -e; exit 1
-    fi
-	set -e
+    fi;	set -e
 }
-
 
 # ==========================================
 # 信息展示模块
