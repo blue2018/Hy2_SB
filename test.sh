@@ -847,6 +847,7 @@ EnvironmentFile=-/etc/sing-box/env
 Environment=GOTRACEBACK=none
 ExecStartPre=/usr/bin/sing-box check -c /etc/sing-box/config.json
 ExecStart=${taskset_bin} -c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json
+# ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; fi'
 ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; fi'
 ${systemd_nice_line}
 ${io_config}
