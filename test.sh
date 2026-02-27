@@ -788,7 +788,7 @@ setup_service() {
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
 	local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="35MiB"
-    local argo_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token ${ARGO_TOKEN:-} >/dev/null 2>&1 &"
+    local argo_exec="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token \${ARGO_TOKEN} >/dev/null 2>&1 &"
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
@@ -812,7 +812,7 @@ rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
 start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json || return 1; }
-start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; }; }
+start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1 || true; sleep 1; ${argo_exec}; } || return 0; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
@@ -844,7 +844,7 @@ EnvironmentFile=-/etc/sing-box/env
 Environment=GOTRACEBACK=none
 ExecStartPre=/usr/bin/sing-box check -c /etc/sing-box/config.json
 ExecStart=${taskset_bin} -c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json
-ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; fi'
+ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; sleep 1; ${argo_exec}; fi'
 ${systemd_nice_line}
 ${io_config}
 LimitNOFILE=1000000
