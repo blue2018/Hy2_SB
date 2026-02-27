@@ -870,10 +870,10 @@ EOF
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
-	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="35MiB"
-	    local cf_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token ${ARGO_TOKEN} >/dev/null 2>&1 &"
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="40MiB" || cf_memlimit="30MiB"
+	    local cf_cmd="GOGC=30 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
-	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd") | crontab -
+	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
 	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
