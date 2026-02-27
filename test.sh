@@ -817,7 +817,7 @@ EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
         sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
-		sh -c "rc-service sing-box zap; rc-service sing-box restart" >/dev/null 2>&1 &
+		( (rc-service sing-box zap; rc-service sing-box restart) >/dev/null 2>&1 ) &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
