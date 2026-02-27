@@ -812,10 +812,7 @@ rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
 start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json || return 1; }
-# start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; }; }
-start_post() {
-    [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; }
-}
+start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; }; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
@@ -847,7 +844,6 @@ EnvironmentFile=-/etc/sing-box/env
 Environment=GOTRACEBACK=none
 ExecStartPre=/usr/bin/sing-box check -c /etc/sing-box/config.json
 ExecStart=${taskset_bin} -c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json
-# ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; fi'
 ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; ${argo_cmd}; fi'
 ${systemd_nice_line}
 ${io_config}
