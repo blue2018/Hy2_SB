@@ -878,6 +878,7 @@ EOF
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd") | crontab -
 	    eval "$cf_cmd"
 	fi
+	
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
         succ "sing-box 启动成功 | 总内存: ${mem_total:-N/A} MB | 可用: $(( ${ma:-0} / 1024 )) MB | 模式: $([[ "$INITCWND_DONE" == "true" ]] && echo "内核" || echo "应用层")"
