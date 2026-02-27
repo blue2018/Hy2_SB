@@ -787,8 +787,6 @@ setup_service() {
     local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
-	local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="35MiB"
-    local argo_base_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token"
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
@@ -812,12 +810,11 @@ rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
 start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.log 2>&1 || { echo "Config check failed:" && cat /tmp/sb_err.log && return 1; }; }
-start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && pkill -9 cloudflared >/dev/null 2>&1 && nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & return 0; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
         sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
-        (rc-service sing-box restart >/dev/null 2>&1 || true) &
+		(rc-service sing-box restart >/dev/null 2>&1 || true) &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
@@ -844,7 +841,6 @@ EnvironmentFile=-/etc/sing-box/env
 Environment=GOTRACEBACK=none
 ExecStartPre=/usr/bin/sing-box check -c /etc/sing-box/config.json
 ExecStart=${taskset_bin} -c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json
-ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & fi'
 ${systemd_nice_line}
 ${io_config}
 LimitNOFILE=1000000
@@ -861,7 +857,8 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload >/dev/null 2>&1
         systemctl enable sing-box >/dev/null 2>&1 || true
-        sync; (systemctl restart sing-box >/dev/null 2>&1 || true) &
+        sync   # 确保环境文件与服务配置落盘
+		(systemctl restart sing-box >/dev/null 2>&1 || true) &
     fi; set +e
 	for i in {1..40}; do
         pid=$(pgrep -x "sing-box" 2>/dev/null | head -n 1)
@@ -871,6 +868,13 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	# 双进程外部 Argo 拉起逻辑
+    if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
+	    pkill -9 cloudflared >/dev/null 2>&1 || true
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="40MiB" || cf_memlimit="30MiB"
+	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
+	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || GOGC=30 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token ${ARGO_TOKEN} >/dev/null 2>&1 &") | crontab -
+	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
         succ "sing-box 启动成功 | 总内存: ${mem_total:-N/A} MB | 可用: $(( ${ma:-0} / 1024 )) MB | 模式: $([[ "$INITCWND_DONE" == "true" ]] && echo "内核" || echo "应用层")"
@@ -880,6 +884,7 @@ EOF
         set -e; exit 1
     fi;	set -e
 }
+
 
 # ==========================================
 # 信息展示模块
