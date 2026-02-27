@@ -811,7 +811,7 @@ rc_ulimit="-n 1000000"
 rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
-start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json; }
+start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.log 2>&1 || { cat /tmp/sb_err.log >&2; return 1; }; }
 start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && pkill -9 cloudflared >/dev/null 2>&1 && nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & return 0; }
 EOF
         chmod +x /etc/init.d/sing-box
