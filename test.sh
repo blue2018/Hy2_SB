@@ -625,7 +625,7 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = 16384         # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = 131072         # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
@@ -787,8 +787,8 @@ setup_service() {
     local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
-	local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="40MiB" || cf_memlimit="30MiB"
-    local argo_cmd="GOGC=30 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 run --token ${ARGO_TOKEN:-} >/dev/null 2>&1 &"
+	local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="30MiB"
+    local argo_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token ${ARGO_TOKEN:-} >/dev/null 2>&1 &"
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
