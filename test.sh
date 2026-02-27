@@ -811,13 +811,13 @@ rc_ulimit="-n 1000000"
 rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
-start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json || return 1; }
-start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && { pkill -9 cloudflared >/dev/null 2>&1; nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & } || return 0; }
+start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json; }
+start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && pkill -9 cloudflared >/dev/null 2>&1 && nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & return 0; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
         sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
-		(rc-service sing-box restart >/dev/null 2>&1 || true) &
+		sh -c "rc-service sing-box zap; rc-service sing-box restart" >/dev/null 2>&1 &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
