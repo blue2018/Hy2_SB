@@ -777,7 +777,7 @@ EOF
 # 服务配置
 # ==========================================
 setup_service() {
-    local real_c="$CPU_CORE" core_range="" pid=""
+    local real_c="$CPU_CORE" core_range="" pid="" sb_exec=""
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
@@ -790,6 +790,7 @@ setup_service() {
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
+		if [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1; then sb_exec="taskset -c ${core_range} /usr/bin/sing-box"; else sb_exec="/usr/bin/sing-box"; fi
         cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
@@ -800,7 +801,7 @@ respawn_max=5
 respawn_period=60
 [ -f /etc/sing-box/env ] && . /etc/sing-box/env
 export GOTRACEBACK=none
-command="/usr/bin/sing-box"
+command="${sb_exec}"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
