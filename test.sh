@@ -484,7 +484,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
         VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
-		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
+		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304; VAR_DEF_MEM=524288
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
     elif [ "$mem_total" -ge 200 ]; then
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
@@ -492,7 +492,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
         VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
-		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
+		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152; VAR_DEF_MEM=262144
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
     elif [ "$mem_total" -ge 100 ]; then
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
@@ -501,7 +501,7 @@ optimize_system() {
         VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
-		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
+		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576; VAR_DEF_MEM=131072
         SBOX_OPTIMIZE_LEVEL="128M 紧凑版"
     else
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
@@ -509,7 +509,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
         VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
-		target_qlen=2000; t_usc=250; ring=512
+		target_qlen=2000; t_usc=250; ring=512; VAR_DEF_MEM=87380
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
     fi
 
@@ -530,15 +530,18 @@ optimize_system() {
     [ "$dyn_buf" -gt 67108864 ] && dyn_buf=67108864
     # 3. 所有内核网络参数基于 dyn_buf 伸缩
     VAR_UDP_RMEM="$dyn_buf"; VAR_UDP_WMEM="$dyn_buf"
-    VAR_DEF_MEM=$(( dyn_buf / 4 ))
-    VAR_BACKLOG=$(( VAR_HY2_BW * 50 ))   # 队列从30提到50，抗突发丢包
-    [ "$VAR_BACKLOG" -lt 8192 ] && VAR_BACKLOG=8192
-    # 4. 联动导出：Sing-box 应用层参数
+	VAR_BACKLOG=$(( VAR_HY2_BW * 20 ))
+	[ "$VAR_BACKLOG" -lt 4096  ] && VAR_BACKLOG=4096
+	[ "$VAR_BACKLOG" -gt 16384 ] && VAR_BACKLOG=16384
+	# 4. 联动导出：Sing-box 应用层参数
     g_wnd=$(( VAR_HY2_BW * loss_compensation / 100 / 8 ))      
     [ "$g_wnd" -lt 15 ] && g_wnd=15  
-    g_buf=$(( dyn_buf / 6 ))         
+    local bdp_bytes=$(( VAR_HY2_BW * 1024 * 1024 / 8 * rtt_avg / 1000 ))
+	g_buf=$(( dyn_buf / 4 ))
+	[ "$g_buf" -lt $(( bdp_bytes * 2 )) ] && g_buf=$(( bdp_bytes * 2 ))
+	[ "$g_buf" -gt $(( dyn_buf / 3 )) ]  && g_buf=$(( dyn_buf / 3 ))   # 不超过 dyn_buf 的 1/3        
     # 5. 确定系统全局 UDP 限制
-    udp_mem_global_min=$(( dyn_buf >> 12 ))
+    udp_mem_global_min=$(( dyn_buf >> 13 ))
     udp_mem_global_pressure=$(( (dyn_buf << 1) >> 12 ))  # 2倍压力线
     udp_mem_global_max=$(( ((mem_total << 20) * 75 / 100) >> 12 ))   # 物理红线 75%
     max_udp_pages=$(( max_udp_mb << 8 ))
