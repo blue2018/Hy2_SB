@@ -344,14 +344,12 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local dyn_pages=$(( dyn_buf / 4096 ))
-	local bdp_pages=$(( VAR_HY2_BW * 1024 / 8 * rtt_val / 1000 / 4 ))
-	local probe_pages=$(( bdp_pages * loss_compensation / 100 ))
+    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 1024 * loss_compensation / 100 ))
     # 1. 基础仲裁
     rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
     # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
+        local factor=15; [ "$max_udp_pages" -le 16384 ] && factor=12
         rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
     # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
@@ -375,8 +373,7 @@ apply_userspace_adaptive_profile() {
         info "Runtime → 激进回收模式 (100M- 适配版)"
     else
         export GOMAXPROCS="$g_procs"
-        if [ "$real_c" -le 1 ]; then export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
-		else export GODEBUG="madvdontneed=1"; fi
+        export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
@@ -393,6 +390,8 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
+    # 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
+    [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
 
@@ -483,7 +482,7 @@ optimize_system() {
         VAR_HY2_BW="500"; max_udp_mb=$((mem_total * 60 / 100))
         SBOX_GOLIMIT="$((mem_total * 75 / 100))MiB"; SBOX_GOGC="150"
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
-        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=33554432
+        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
 		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
@@ -491,7 +490,7 @@ optimize_system() {
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
         SBOX_GOLIMIT="$((mem_total * 73 / 100))MiB"; SBOX_GOGC="100"
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
-        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=16777216
+        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
 		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
@@ -499,7 +498,7 @@ optimize_system() {
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
         SBOX_GOLIMIT="$((mem_total * 70 / 100))MiB"; SBOX_GOGC="70"
         SBOX_MEM_HIGH="$((mem_total * 80 / 100))M"; SBOX_MEM_MAX="$((mem_total * 90 / 100))M"
-        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
+        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
 		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
@@ -508,7 +507,7 @@ optimize_system() {
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
         SBOX_GOLIMIT="$((mem_total * 65 / 100))MiB"; SBOX_GOGC="50"
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
-        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
+        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
 		target_qlen=2000; t_usc=250; ring=512
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
@@ -626,7 +625,7 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = $([ "$mem_total" -ge 200 ] && echo "131072" || echo "65536")  # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = 131072        # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
@@ -777,20 +776,20 @@ EOF
 # 服务配置
 # ==========================================
 setup_service() {
-    local real_c="$CPU_CORE" core_range="" pid="" sb_exec=""
+    local real_c="$CPU_CORE" core_range="" pid=""
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
-    local mem_total=$(probe_memory_total); local io_prio=4; local final_nice="$cur_nice"
+    local mem_total=$(probe_memory_total); local io_prio=4
     [ "$real_c" -le 1 ] && core_range="0" || core_range="0-$((real_c - 1))"
     [ "$mem_total" -ge 450 ] && [ "$io_class" = "realtime" ] && io_prio=0 || io_prio=4
     [ "$mem_total" -lt 200 ] && io_prio=7
+    local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
-		if [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1; then sb_exec="taskset -c ${core_range} /usr/bin/sing-box"; else sb_exec="/usr/bin/sing-box"; fi
         cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
@@ -801,7 +800,7 @@ respawn_max=5
 respawn_period=60
 [ -f /etc/sing-box/env ] && . /etc/sing-box/env
 export GOTRACEBACK=none
-command="${sb_exec}"
+command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
@@ -871,8 +870,8 @@ EOF
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
-	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
-	    local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol auto --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="30MiB"
+	    local cf_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol auto --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
@@ -955,6 +954,7 @@ display_system_status() {
     fi
     local current_cca=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
     case "$current_cca" in bbr3) bbr_display="BBRv3 (极致响应)" ;; bbr2) bbr_display="BBRv2 (平衡加速)" ;; bbr) bbr_display="BBRv1 (标准加速)" ;; *) bbr_display="$current_cca (非标准)" ;; esac
+	
     echo -e "系统版本: \033[1;33m$OS_DISPLAY\033[0m"
     echo -e "内核信息: \033[1;33m$VER_INFO\033[0m"
     echo -e "进程权重: \033[1;33mNice $NI_VAL $NI_LBL\033[0m"
