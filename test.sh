@@ -391,8 +391,6 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
-	# 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
-    [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
 
@@ -814,7 +812,8 @@ start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
-        sync; (rc-service sing-box restart >/dev/null 2>&1 || true) &
+        sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
+		(rc-service sing-box restart >/dev/null 2>&1 || true) &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
