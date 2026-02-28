@@ -469,7 +469,7 @@ service_ctrl() {
 optimize_system() {
     local rtt_res=($(probe_network_rtt)); local mem_total=$(probe_memory_total)
 	local rtt_avg="${rtt_res[0]:-150}" real_rtt_factors="${rtt_res[1]:-130}" loss_compensation="${rtt_res[2]:-100}"
-    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30
+    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30 output_limit=262144
     local dyn_buf g_procs g_wnd g_buf net_bgt net_usc tcp_rmem_max target_qlen t_usc ring
     local max_udp_mb max_udp_pages udp_mem_global_min udp_mem_global_pressure udp_mem_global_max
     local swappiness_val="${SWAPPINESS_VAL:-10}" busy_poll_val="${BUSY_POLL_VAL:-0}"
@@ -484,7 +484,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
         VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
-		target_qlen=10000; t_usc=100; ring=2048
+		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
     elif [ "$mem_total" -ge 200 ]; then
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
@@ -492,7 +492,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
         VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
-		target_qlen=8000;  t_usc=150; ring=1024
+		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
     elif [ "$mem_total" -ge 100 ]; then
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
@@ -501,7 +501,7 @@ optimize_system() {
         VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
-		target_qlen=5000;  t_usc=150; ring=1024
+		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
         SBOX_OPTIMIZE_LEVEL="128M 紧凑版"
     else
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
@@ -509,7 +509,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
         VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
-		target_qlen=2000;  t_usc=250; ring=512
+		target_qlen=2000; t_usc=250; ring=512
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
     fi
 
@@ -630,7 +630,7 @@ net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
 net.ipv4.tcp_slow_start_after_idle = 0     # 闲置后慢启动开关
-net.ipv4.tcp_limit_output_bytes = $([ "$mem_total" -ge 200 ] && echo "262144" || echo "131072") # 限制TCP连接占用发送队列
+net.ipv4.tcp_limit_output_bytes = $output_limit  # 限制TCP连接占用发送队列
 net.ipv4.udp_gro_enabled = 1               # UDP 分段聚合 (降CPU负载)
 net.ipv4.udp_early_demux = 1               # UDP 早期路由优化
 net.ipv4.udp_l4_early_demux = 1            # UDP 四层早期分流
@@ -653,7 +653,7 @@ $([ "$mem_total" -lt 100 ] && cat <<LOWMEM
 net.ipv4.tcp_sack = 1                      # 禁用SACK (省内存)
 net.ipv4.tcp_dsack = 1                     # 禁用D-SACK
 net.ipv4.tcp_timestamps = 1                # 禁用时间戳 (省包头开销)
-net.ipv4.tcp_moderate_rcvbuf = 1           # 锁定手动缓冲区 (防内核抢占)
+net.ipv4.tcp_moderate_rcvbuf = 1           # 用接收缓冲区自动调优 (内核根据路径动态调整)
 net.ipv4.tcp_max_syn_backlog = 512         # 缩减握手队列
 LOWMEM
 )
@@ -871,7 +871,7 @@ EOF
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="30MiB"
-	    local cf_cmd="GOGC=30 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+	    local cf_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol auto --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
