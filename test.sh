@@ -344,12 +344,14 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 1024 * loss_compensation / 100 ))
+    local dyn_pages=$(( dyn_buf / 4096 ))
+	local bdp_pages=$(( VAR_HY2_BW * 1024 / 8 * rtt_val / 1000 / 4 ))
+	local probe_pages=$(( bdp_pages * loss_compensation / 100 ))
     # 1. 基础仲裁
     rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
     # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -le 16384 ] && factor=12
+        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
         rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
     # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
@@ -373,7 +375,8 @@ apply_userspace_adaptive_profile() {
         info "Runtime → 激进回收模式 (100M- 适配版)"
     else
         export GOMAXPROCS="$g_procs"
-        export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+        if [ "$real_c" -le 1 ]; then export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+		else export GODEBUG="madvdontneed=1"; fi
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
@@ -390,8 +393,6 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
-    # 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
-    [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
 
@@ -484,7 +485,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
         VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=33554432
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
-		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304; VAR_DEF_MEM=524288
+		target_qlen=10000; t_usc=100; ring=4096; output_limit=4194304; VAR_DEF_MEM=524288
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
     elif [ "$mem_total" -ge 200 ]; then
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
@@ -492,7 +493,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
         VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
-		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152; VAR_DEF_MEM=262144
+		target_qlen=8000; t_usc=150; ring=2048; output_limit=2097152; VAR_DEF_MEM=262144
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
     elif [ "$mem_total" -ge 100 ]; then
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
@@ -501,7 +502,7 @@ optimize_system() {
         VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
-		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576; VAR_DEF_MEM=131072
+		target_qlen=5000; t_usc=150; ring=2048; output_limit=1048576; VAR_DEF_MEM=131072
         SBOX_OPTIMIZE_LEVEL="128M 紧凑版"
     else
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
@@ -509,7 +510,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
         VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
-		target_qlen=2000; t_usc=250; ring=512; VAR_DEF_MEM=87380
+		target_qlen=2000; t_usc=250; ring=1024; VAR_DEF_MEM=87380
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
     fi
 
@@ -541,8 +542,10 @@ optimize_system() {
 	[ "$g_buf" -lt $(( bdp_bytes * 2 )) ] && g_buf=$(( bdp_bytes * 2 ))
 	[ "$g_buf" -gt $(( dyn_buf / 3 )) ]  && g_buf=$(( dyn_buf / 3 ))   # 不超过 dyn_buf 的 1/3        
     # 5. 确定系统全局 UDP 限制
-    udp_mem_global_min=$(( dyn_buf >> 13 ))
-    udp_mem_global_pressure=$(( (dyn_buf << 1) >> 12 ))  # 2倍压力线
+    local udp_min_floor=$(( max_udp_pages * 30 / 100 ))
+	udp_mem_global_min=$(( dyn_buf >> 13 ))
+	[ "$udp_mem_global_min" -lt "$udp_min_floor" ] && udp_mem_global_min=$udp_min_floor
+    udp_mem_global_pressure=$(( (dyn_buf << 3) >> 12 ))  # 3倍压力线
     udp_mem_global_max=$(( ((mem_total << 20) * 75 / 100) >> 12 ))   # 物理红线 75%
     max_udp_pages=$(( max_udp_mb << 8 ))
     # 6. 确定网卡调度预算
@@ -779,15 +782,16 @@ EOF
 # 服务配置
 # ==========================================
 setup_service() {
-    local real_c="$CPU_CORE" core_range="" pid=""
+    local real_c="$CPU_CORE" core_range="" pid="" sb_command="" sb_command_args=""
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
-    local mem_total=$(probe_memory_total); local io_prio=4
+    local mem_total=$(probe_memory_total); local io_prio=4; local final_nice="$cur_nice"
     [ "$real_c" -le 1 ] && core_range="0" || core_range="0-$((real_c - 1))"
     [ "$mem_total" -ge 450 ] && [ "$io_class" = "realtime" ] && io_prio=0 || io_prio=4
     [ "$mem_total" -lt 200 ] && io_prio=7
-    local final_nice="$cur_nice"
+	if [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1; then sb_command="taskset"; sb_command_args="-c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json"
+	else sb_command="/usr/bin/sing-box"; sb_command_args="run -c /etc/sing-box/config.json"; fi
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
@@ -803,8 +807,8 @@ respawn_max=5
 respawn_period=60
 [ -f /etc/sing-box/env ] && . /etc/sing-box/env
 export GOTRACEBACK=none
-command="/usr/bin/sing-box"
-command_args="run -c /etc/sing-box/config.json"
+command="${sb_command}"
+command_args="${sb_command_args}"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
 supervise_daemon_args="--nicelevel ${final_nice}"
