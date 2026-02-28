@@ -608,7 +608,7 @@ net.core.netdev_budget = $net_bgt          # 调度预算 (单次轮询处理包
 net.core.netdev_budget_usecs = $net_usc    # 调度时长 (单次轮询微秒上限)
 net.core.netdev_tstamp_prequeue = 0        # 禁用时间戳预处理 (降延迟)
 net.ipv4.tcp_keepalive_time = 60           # 60s 无数据开始探测 (防NAT断流)
-net.ipv4.tcp_keepalive_intvl = 10          # 每 10s 探测一次
+net.ipv4.tcp_keepalive_intvl = 20          # 每 20s 探测一次
 net.ipv4.tcp_keepalive_probes = 3          # 连续 3 次无响应视为断线
 
 # === 三、 协议栈缓冲与自适应加速 (TCP/UDP/BBR/MTU) ===
