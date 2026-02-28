@@ -349,7 +349,7 @@ safe_rtt() {
     rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
     # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
+        local factor=15; [ "$max_udp_pages" -le 16384 ] && factor=12
         rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
     # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
@@ -391,7 +391,7 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
-	# 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
+    # 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
     [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
@@ -813,7 +813,8 @@ start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
-        sync; (rc-service sing-box restart >/dev/null 2>&1 || true) &
+        sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
+		(rc-service sing-box restart >/dev/null 2>&1 || true) &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
@@ -866,7 +867,6 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
-	
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
