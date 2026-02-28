@@ -721,8 +721,8 @@ create_config() {
     local ds="ipv4_only"; local PSK=""; 
     [ "${IS_V6_OK:-false}" = "true" ] && ds="prefer_ipv4"
     local mem_total=$(probe_memory_total); : ${mem_total:=64}; local timeout="30s"
-	local dns_srv='{"tag":"cloudflare-doh","address":"1.1.1.1","detour":"direct-out"},{"tag":"google-doh","address":"8.8.4.4","detour":"direct-out"}'
-    [ "$mem_total" -ge 100 ] && timeout="40s" && dns_srv='{"tag":"cloudflare-doh","address":"https://1.1.1.1/dns-query","detour":"direct-out"},{"tag":"google-doh","address":"https://8.8.8.8/dns-query","detour":"direct-out"}'
+	local dns_srv='{"tag":"cloudflare-doh","type":"udp","server":"1.1.1.1","detour":"direct-out"},{"tag":"google-doh","type":"udp","server":"8.8.8.8","detour":"direct-out"}'
+    [ "$mem_total" -ge 100 ] && timeout="40s" && dns_srv='{"tag":"cloudflare-doh","type":"https","server":"1.1.1.1","detour":"direct-out"},{"tag":"google-doh","type":"https","server":"8.8.8.8","detour":"direct-out"}'
 	[ "$mem_total" -ge 200 ] && timeout="60s"; [ "$mem_total" -ge 450 ] && timeout="80s"
 
     # 端口和 PSK (密码) 确定逻辑
@@ -762,10 +762,10 @@ create_config() {
     cat > "/etc/sing-box/config.json" <<EOF
 {
   "log": { "level": "fatal", "timestamp": true },
-  "dns": { "servers":[$dns_srv], "strategy":"$ds", "independent_cache":true, "final":"cloudflare-doh" },
+  "dns": { "servers":[$dns_srv], "independent_cache":true, "final":"cloudflare-doh" },
   "inbounds": [ $HY2_IN $ARGO_IN ],
-  "outbounds": [ { "type": "direct", "tag": "direct-out", "domain_strategy": "$ds" } ],
-  "route": { "default_domain_resolver":"cloudflare-doh" }
+  "outbounds": [ { "type": "direct", "tag": "direct-out" } ],
+  "route": { "default_domain_resolver":"cloudflare-doh", "default_network_strategy":"$ds" }
 }
 EOF
     chmod 600 "/etc/sing-box/config.json"
