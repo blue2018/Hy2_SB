@@ -532,17 +532,16 @@ optimize_system() {
     # 3. 所有内核网络参数基于 dyn_buf 伸缩
     VAR_UDP_RMEM="$dyn_buf"; VAR_UDP_WMEM="$dyn_buf"
     VAR_DEF_MEM=$(( dyn_buf / 4 ))
-    VAR_BACKLOG=$(( VAR_HY2_BW * 50 ))
-	[ "$VAR_BACKLOG" -lt 8192 ] && VAR_BACKLOG=8192
+    VAR_BACKLOG=$(( VAR_HY2_BW * 20 ))
+	[ "$VAR_BACKLOG" -lt 4096  ] && VAR_BACKLOG=4096
+	[ "$VAR_BACKLOG" -gt 16384 ] && VAR_BACKLOG=16384
     # 4. 联动导出：Sing-box 应用层参数
     g_wnd=$(( VAR_HY2_BW * loss_compensation / 100 / 8 ))      
     [ "$g_wnd" -lt 15 ] && g_wnd=15  
     g_buf=$(( dyn_buf / 6 ))    
     # 5. 确定系统全局 UDP 限制
     max_udp_pages=$(( max_udp_mb << 8 ))
-    local udp_min_floor=$(( max_udp_pages * 30 / 100 ))
-    udp_mem_global_min=$(( dyn_buf >> 13 ))
-    [ "$udp_mem_global_min" -lt "$udp_min_floor" ] && udp_mem_global_min=$udp_min_floor
+    udp_mem_global_min=$(( dyn_buf >> 12 ))
     udp_mem_global_pressure=$(( (dyn_buf * 3) >> 12 ))
     udp_mem_global_max=$(( ((mem_total << 20) * 75 / 100) >> 12 ))
     # 6. 确定网卡调度预算
