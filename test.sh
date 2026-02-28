@@ -431,29 +431,6 @@ apply_nic_core_boost() {
     info "NIC 优化 → 网卡: $IFACE | 队列: $target_qlen | 中断延迟: ${t_usc}us | 环形缓冲区: $ring"
 }
 
-# Loopback 接口专项优化（为 cloudflared → sing-box 本地传输加速）
-tune_loopback() {
-    # 1. 放大 loopback 的发送队列
-    #    默认 txqueuelen=1000，对高带宽本地传输是瓶颈
-    #    65535 是内核允许的上限，loopback 不存在真实丢包，只影响内存指针，开销极小
-    #    注意：apply_nic_core_boost() 只操作默认路由网卡（eth0/ens3 等），不碰 lo，两者无重叠
-    ip link set lo txqueuelen 65535 2>/dev/null || true
-
-    # 2. 为 loopback 网段注入 initcwnd/initrwnd
-    #    loopback 没有默认路由条目，所以 apply_initcwnd_optimization() 对它无效
-    #    必须单独 replace local 路由来注入 TCP 窗口初始值
-    #    initcwnd 512 = 初始就能发 512×MSS ≈ 768KB，跳过慢启动阶段
-    #    即使内核限制无法写 /proc/sys，这条 ip route 命令通常仍然可以执行
-    ip route replace local 127.0.0.0/8 dev lo \
-        initcwnd 512 initrwnd 512 2>/dev/null \
-        && info "Loopback initcwnd 已注入 (512)" \
-        || warn "Loopback initcwnd 注入受限，维持默认"
-
-    # 3. 清除内核对 127.0.0.1 的旧 TCP 路径缓存
-    #    避免内核沿用历史测量值（如旧的小窗口）来限制新连接
-    ip tcp_metrics delete 127.0.0.1 2>/dev/null || true
-}
-
 # 配置预检
 verify_config() {
     local LOG="/tmp/sb_check.log"; info "执行配置合规性检查..."
@@ -475,12 +452,6 @@ apply_firewall() {
             iptables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1; iptables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
             command -v ip6tables >/dev/null 2>&1 && { ip6tables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1; ip6tables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1; }
         fi    } || true
-	# 新增：封锁 8001 端口的外部访问（VLESS inbound 只供本机 cloudflared 使用）
-    # 虽然监听在 127.0.0.1 已经隐式限制，但显式 DROP 是纵深防御
-    if command -v iptables >/dev/null 2>&1; then
-        iptables -D INPUT -p tcp --dport 8001 ! -s 127.0.0.0/8 -j DROP >/dev/null 2>&1
-        iptables -I INPUT -p tcp --dport 8001 ! -s 127.0.0.0/8 -j DROP >/dev/null 2>&1
-    fi
 }
 	
 # "全功能调度器"
@@ -685,14 +656,10 @@ net.ipv4.tcp_moderate_rcvbuf = 1           # 用接收缓冲区自动调优 (内
 net.ipv4.tcp_max_syn_backlog = 512         # 缩减握手队列
 LOWMEM
 )
-
-# === 五、 Loopback 本地回环加速 (cloudflared → sing-box 内部传输) ===
-net.ipv4.tcp_moderate_rcvbuf = 1           # 对所有连接（含 loopback）启用接收缓冲自动调节
 SYSCTL
     # 加载配置（优先 sysctl --system，其次回退）
 	if command -v sysctl >/dev/null 2>&1 && sysctl --system >/dev/null 2>&1; then :
 	else sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1 || true; fi
-	tune_loopback
 }
 
 # ==========================================
@@ -789,11 +756,6 @@ create_config() {
           "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
           "transport": { "type": "httpupgrade", "host": "%s" }
         }' "$PSK" "$A_DOMAIN")
-		ARGO_IN=$(printf ',{
-		  "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001,
-		  "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
-		  "transport": { "type": "ws", "path": "/", "headers": { "Host": "%s", "X-Accel-Buffering": "no", "Cache-Control": "no-store" } }
-		}' "$PSK" "$A_DOMAIN")
     fi
     
     # 写入 Sing-box 配置文件
@@ -908,35 +870,8 @@ EOF
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
-	    # cf_memlimit 与内存档位联动，不写死固定值
-		# cloudflared 作为 WebSocket 代理进程，连接池+TLS session 需要充足内存
-		# 否则 Go GC 高频触发，下行 goroutine 被暂停，造成下行速度不稳定
-		local cf_memlimit
-		if   [ "${mem_total:-64}" -ge 512 ]; then cf_memlimit="200MiB"
-		elif [ "${mem_total:-64}" -ge 256 ]; then cf_memlimit="150MiB"
-		elif [ "${mem_total:-64}" -ge 128 ]; then cf_memlimit="100MiB"
-		else                                       cf_memlimit="80MiB"
-		fi
-		
-		# 多核时将 cloudflared 绑到最后一个核，与 sing-box 的 taskset -c 0~(N-1) 形成互补
-		# 单核时不绑核，让调度器自行分时，避免 taskset 在单核上造成优先级翻转
-		local cf_taskset=""
-		if [ "${CPU_CORE:-1}" -ge 2 ]; then
-		    cf_taskset="taskset -c $((CPU_CORE - 1))"
-		fi
-		
-		# 协议改为 http2：
-		#   1. 避免 cloudflared QUIC(UDP) 与 Hy2(UDP) 争抢 UDP 缓冲区和 CPU
-		#   2. http2 走 TCP 443 出站，与脚本的 TCP 优化参数（BBR、rmem/wmem）协同
-		#   3. CF 官方文档：http2 用 TCP port 7844，quic 用 UDP port 7844
-		# 心跳改为 30s × 8 次 = 240 秒容忍窗口：
-		#   原来 20s × 5 = 100 秒，下行大流量时心跳帧被数据帧延误容易误触超时重连
-		#   240 秒窗口既能避免下行繁忙时误断，又比 600 秒（60s×10）更快感知真实断线
-		local cf_cmd="GOGC=100 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=1 \
-		  nohup ${cf_taskset} /usr/local/bin/cloudflared tunnel \
-		  --protocol http2 --edge-ip-version auto --no-autoupdate \
-		  --heartbeat-interval 30s --heartbeat-count 8 \
-		  run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
+	    local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol auto --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
@@ -962,7 +897,7 @@ get_env_data() {
     [ -z "$d" ] && return 1
     read -r RAW_PSK RAW_PORT CERT_PATH <<< "$d"
     # 提取 Argo 域名 (通过 transport.host 确保兼容单/双进程模式)
-	RAW_ARGO_DOMAIN=$(jq -r '.. | objects | select(.tag == "vless-argo-in") | .transport.headers.Host // .transport.host // empty' "$CFG" 2>/dev/null)
+	RAW_ARGO_DOMAIN=$(jq -r '.. | objects | select(.tag == "vless-argo-in") | .transport.host // empty' "$CFG" 2>/dev/null)
     # 提取 SNI 与 指纹
     RAW_SNI=$(openssl x509 -in "$CERT_PATH" -noout -subject -nameopt RFC2253 2>/dev/null | sed 's/.*CN=\([^,]*\).*/\1/')
     [[ "$RAW_SNI" == *"CloudFlare"* || -z "$RAW_SNI" ]] && RAW_SNI="$TLS_DOMAIN"
@@ -997,7 +932,7 @@ display_links() {
     echo -e "\n\033[1;32m[节点信息]\033[0m >>> 端口: $p_text $p_icon | 服务: $s_text $s_icon"
     [ -n "${RAW_IP4:-}" ] && LINK_V4="hy2://$RAW_PSK@$RAW_IP4:$RAW_PORT/?${BASE_PARAM}#${hostname_tag}_Hy2_v4" && echo -e "\n\033[1;35m[IPv4 节点]\033[0m\n$LINK_V4" && FULL_CLIP="$LINK_V4"
     [[ "${RAW_IP6:-}" == *:* ]] && LINK_V6="hy2://$RAW_PSK@[$RAW_IP6]:$RAW_PORT/?${BASE_PARAM}#${hostname_tag}_Hy2_v6" && echo -e "\n\033[1;36m[IPv6 节点]\033[0m\n$LINK_V6" && FULL_CLIP="${FULL_CLIP:+$FULL_CLIP$'\n'}$LINK_V6"
-	[ -n "$RAW_ARGO_DOMAIN" ] && [ "$RAW_ARGO_DOMAIN" != "null" ] && LINK_ARGO="vless://$RAW_PSK@$RAW_ARGO_DOMAIN:443?encryption=none&security=tls&sni=$RAW_ARGO_DOMAIN&type=ws&path=%2F&host=$RAW_ARGO_DOMAIN&fp=chrome#${hostname_tag}_Argo" && echo -e "\n\033[1;33m[Argo 隧道]\033[0m\n$LINK_ARGO" && FULL_CLIP="${FULL_CLIP:+$FULL_CLIP$'\n'}$LINK_ARGO"
+	[ -n "$RAW_ARGO_DOMAIN" ] && [ "$RAW_ARGO_DOMAIN" != "null" ] && LINK_ARGO="vless://$RAW_PSK@$RAW_ARGO_DOMAIN:443?encryption=none&security=tls&sni=$RAW_ARGO_DOMAIN&type=httpupgrade&host=$RAW_ARGO_DOMAIN&fp=chrome#${hostname_tag}_Argo" && echo -e "\n\033[1;33m[Argo 隧道]\033[0m\n$LINK_ARGO" && FULL_CLIP="${FULL_CLIP:+$FULL_CLIP$'\n'}$LINK_ARGO"
 	
     echo -e "\n\033[1;34m==========================================\033[0m"
     echo -e "\033[1;32m[安全增强]\033[0m 流量已混入 $RAW_SNI 的 TLS 1.3 握手池"
@@ -1056,7 +991,7 @@ EOF
     local funcs=(probe_network_rtt probe_memory_total apply_initcwnd_optimization prompt_for_port
         get_cpu_core get_env_data display_links display_system_status detect_os copy_to_clipboard
         optimize_system install_singbox create_config setup_service apply_firewall service_ctrl info err warn succ
-        apply_userspace_adaptive_profile apply_nic_core_boost verify_config tune_loopback
+        apply_userspace_adaptive_profile apply_nic_core_boost verify_config
         setup_zrm_swap safe_rtt generate_cert setup_argo_logic)
 
     for f in "${funcs[@]}"; do
