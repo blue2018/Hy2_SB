@@ -722,7 +722,7 @@ create_config() {
     [ "${IS_V6_OK:-false}" = "true" ] && ds="prefer_ipv4"
 	
     local mem_total=$(probe_memory_total); : ${mem_total:=64}; local timeout="30s"
-    local dns_srv='{"address":"8.8.4.4","detour":"direct-out"},{"address":"1.1.1.1","detour":"direct-out"}'
+	local dns_srv='{"tag":"google","address":"8.8.4.4","detour":"direct-out"},{"tag":"cloudflare","address":"1.1.1.1","detour":"direct-out"}'
     [ "$mem_total" -ge 100 ] && timeout="40s" && dns_srv='{"tag":"cloudflare-doh","address":"https://1.1.1.1/dns-query","detour":"direct-out"},{"tag":"google-doh","address":"https://8.8.8.8/dns-query","detour":"direct-out"}'
     [ "$mem_total" -ge 200 ] && timeout="60s"; [ "$mem_total" -ge 450 ] && timeout="80s"
 
