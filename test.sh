@@ -539,9 +539,7 @@ optimize_system() {
     g_buf=$(( dyn_buf / 6 ))
     # 5. 确定系统全局 UDP 限制
 	max_udp_pages=$(( max_udp_mb << 8 ))
-    local udp_min_floor=$(( max_udp_pages * 30 / 100 ))
-	udp_mem_global_min=$(( dyn_buf >> 12 ))
-	[ "$udp_mem_global_min" -lt "$udp_min_floor" ] && udp_mem_global_min=$udp_min_floor
+    udp_mem_global_min=$(( dyn_buf >> 12 ))
 	udp_mem_global_pressure=$(( (dyn_buf << 1) >> 12 ))  # 2倍压力线
     udp_mem_global_max=$(( ((mem_total << 20) * 75 / 100) >> 12 ))   # 物理红线 75%
     # 6. 确定网卡调度预算
