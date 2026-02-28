@@ -765,7 +765,7 @@ create_config() {
   "dns": { "servers":[$dns_srv], "independent_cache":true, "final":"cloudflare-doh" },
   "inbounds": [ $HY2_IN $ARGO_IN ],
   "outbounds": [ { "type": "direct", "tag": "direct-out" } ],
-  "route": { "default_domain_resolver":"cloudflare-doh", "default_network_strategy":"$ds" }
+  "route": { "default_domain_resolver":"cloudflare-doh", "rules":[ { "action":"resolve", "strategy":"$ds" } ] }
 }
 EOF
     chmod 600 "/etc/sing-box/config.json"
