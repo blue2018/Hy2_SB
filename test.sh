@@ -373,8 +373,7 @@ apply_userspace_adaptive_profile() {
         info "Runtime → 激进回收模式 (100M- 适配版)"
     else
         export GOMAXPROCS="$g_procs"
-        if [ "$real_c" -le 1 ]; then export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
-		else export GODEBUG="madvdontneed=1"; fi
+        export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
@@ -491,7 +490,7 @@ optimize_system() {
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
         SBOX_GOLIMIT="$((mem_total * 73 / 100))MiB"; SBOX_GOGC="100"
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
-        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=16777216
+        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
 		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
@@ -499,7 +498,7 @@ optimize_system() {
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
         SBOX_GOLIMIT="$((mem_total * 70 / 100))MiB"; SBOX_GOGC="70"
         SBOX_MEM_HIGH="$((mem_total * 80 / 100))M"; SBOX_MEM_MAX="$((mem_total * 90 / 100))M"
-        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
+        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
 		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
@@ -508,7 +507,7 @@ optimize_system() {
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
         SBOX_GOLIMIT="$((mem_total * 65 / 100))MiB"; SBOX_GOGC="50"
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
-        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
+        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
 		target_qlen=2000; t_usc=250; ring=512
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
@@ -626,7 +625,7 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = $([ "$mem_total" -ge 100 ] && echo "131072" || echo "65536")   # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = 131072        # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
@@ -781,10 +780,11 @@ setup_service() {
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
-    local mem_total=$(probe_memory_total); local io_prio=4; local final_nice="$cur_nice"
+    local mem_total=$(probe_memory_total); local io_prio=4
     [ "$real_c" -le 1 ] && core_range="0" || core_range="0-$((real_c - 1))"
     [ "$mem_total" -ge 450 ] && [ "$io_class" = "realtime" ] && io_prio=0 || io_prio=4
     [ "$mem_total" -lt 200 ] && io_prio=7
+    local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
