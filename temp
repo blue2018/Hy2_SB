@@ -44,9 +44,9 @@ detect_os() {
 install_dependencies() {
     info "正在检查系统类型..."
     local PM="" DEPS="curl jq openssl ca-certificates bash tzdata tar iproute2 iptables procps netcat-openbsd" OPT="ethtool kmod wireguard-tools"
-    if command -v apk >/dev/null 2>&1; then PM="apk"; DEPS="$DEPS coreutils util-linux-misc"
-    elif command -v apt-get >/dev/null 2>&1; then PM="apt"; DEPS="$DEPS util-linux"
-    else PM="yum"; DEPS="${DEPS//netcat-openbsd/nc}"; DEPS="${DEPS//procps/procps-ng} util-linux"; fi
+    if command -v apk >/dev/null 2>&1; then PM="apk"; DEPS="$DEPS coreutils util-linux-misc dcron"
+    elif command -v apt-get >/dev/null 2>&1; then PM="apt"; DEPS="$DEPS util-linux cron"
+    else PM="yum"; DEPS="${DEPS//netcat-openbsd/nc}"; DEPS="${DEPS//procps/procps-ng} util-linux cronie"; fi
     [ -w /proc/sys/vm/drop_caches ] && sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
     case "$PM" in
         apk) info "检测到 Alpine 系统，执行分批安装依赖..."
@@ -469,7 +469,7 @@ service_ctrl() {
 optimize_system() {
     local rtt_res=($(probe_network_rtt)); local mem_total=$(probe_memory_total)
 	local rtt_avg="${rtt_res[0]:-150}" real_rtt_factors="${rtt_res[1]:-130}" loss_compensation="${rtt_res[2]:-100}"
-    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30
+    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30 output_limit=262144
     local dyn_buf g_procs g_wnd g_buf net_bgt net_usc tcp_rmem_max target_qlen t_usc ring
     local max_udp_mb max_udp_pages udp_mem_global_min udp_mem_global_pressure udp_mem_global_max
     local swappiness_val="${SWAPPINESS_VAL:-10}" busy_poll_val="${BUSY_POLL_VAL:-0}"
@@ -484,7 +484,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
         VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
-		target_qlen=10000; t_usc=100; ring=2048
+		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
     elif [ "$mem_total" -ge 200 ]; then
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
@@ -492,7 +492,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
         VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
-		target_qlen=8000;  t_usc=150; ring=1024
+		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
     elif [ "$mem_total" -ge 100 ]; then
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
@@ -501,7 +501,7 @@ optimize_system() {
         VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
-		target_qlen=5000;  t_usc=150; ring=1024
+		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
         SBOX_OPTIMIZE_LEVEL="128M 紧凑版"
     else
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
@@ -509,7 +509,7 @@ optimize_system() {
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
         VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
-		target_qlen=2000;  t_usc=250; ring=512
+		target_qlen=2000; t_usc=250; ring=512
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
     fi
 
@@ -625,12 +625,12 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = 131072         # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = 131072        # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
 net.ipv4.tcp_slow_start_after_idle = 0     # 闲置后慢启动开关
-net.ipv4.tcp_limit_output_bytes = $([ "$mem_total" -ge 200 ] && echo "262144" || echo "131072") # 限制TCP连接占用发送队列
+net.ipv4.tcp_limit_output_bytes = $output_limit  # 限制TCP连接占用发送队列
 net.ipv4.udp_gro_enabled = 1               # UDP 分段聚合 (降CPU负载)
 net.ipv4.udp_early_demux = 1               # UDP 早期路由优化
 net.ipv4.udp_l4_early_demux = 1            # UDP 四层早期分流
@@ -653,7 +653,7 @@ $([ "$mem_total" -lt 100 ] && cat <<LOWMEM
 net.ipv4.tcp_sack = 1                      # 禁用SACK (省内存)
 net.ipv4.tcp_dsack = 1                     # 禁用D-SACK
 net.ipv4.tcp_timestamps = 1                # 禁用时间戳 (省包头开销)
-net.ipv4.tcp_moderate_rcvbuf = 1           # 锁定手动缓冲区 (防内核抢占)
+net.ipv4.tcp_moderate_rcvbuf = 1           # 用接收缓冲区自动调优 (内核根据路径动态调整)
 net.ipv4.tcp_max_syn_backlog = 512         # 缩减握手队列
 LOWMEM
 )
@@ -787,8 +787,6 @@ setup_service() {
     local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
-	local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="35MiB"
-    local argo_base_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${real_c} /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 --tun-txqueue 2048 run --token"
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
@@ -811,8 +809,7 @@ rc_ulimit="-n 1000000"
 rc_nice="${final_nice}"
 rc_oom_score_adj="-500"
 depend() { need net; after firewall; }
-start_pre() { pkill -9 sing-box >/dev/null 2>&1; /usr/bin/sing-box check -c /etc/sing-box/config.json; }
-start_post() { [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ] && pkill -9 cloudflared >/dev/null 2>&1 && nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & return 0; }
+start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.log 2>&1 || { echo "Config check failed:" && cat /tmp/sb_err.log && return 1; }; }
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
@@ -844,7 +841,6 @@ EnvironmentFile=-/etc/sing-box/env
 Environment=GOTRACEBACK=none
 ExecStartPre=/usr/bin/sing-box check -c /etc/sing-box/config.json
 ExecStart=${taskset_bin} -c ${core_range} /usr/bin/sing-box run -c /etc/sing-box/config.json
-ExecStartPost=/usr/bin/bash -c 'if [ "\${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "\${ARGO_TOKEN:-}" ]; then pkill -9 cloudflared >/dev/null 2>&1 || true; nohup ${argo_base_cmd} "\${ARGO_TOKEN}" >/dev/null 2>&1 & fi'
 ${systemd_nice_line}
 ${io_config}
 LimitNOFILE=1000000
@@ -871,6 +867,15 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	# 双进程外部 Argo 拉起逻辑
+	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
+	    pkill -9 cloudflared >/dev/null 2>&1 || true
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="60MiB" || cf_memlimit="30MiB"
+	    local cf_cmd="GOGC=50 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol auto --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
+	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
+	    sh -c "$cf_cmd" &
+	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
         succ "sing-box 启动成功 | 总内存: ${mem_total:-N/A} MB | 可用: $(( ${ma:-0} / 1024 )) MB | 模式: $([[ "$INITCWND_DONE" == "true" ]] && echo "内核" || echo "应用层")"
