@@ -538,10 +538,7 @@ optimize_system() {
     # 4. 联动导出：Sing-box 应用层参数
     g_wnd=$(( VAR_HY2_BW * loss_compensation / 100 / 8 ))      
     [ "$g_wnd" -lt 15 ] && g_wnd=15  
-    local bdp_bytes=$(( VAR_HY2_BW * 1024 * 1024 / 8 * rtt_avg / 1000 ))
-	g_buf=$(( dyn_buf / 4 ))
-	[ "$g_buf" -lt $(( bdp_bytes * 2 )) ] && g_buf=$(( bdp_bytes * 2 ))
-	[ "$g_buf" -gt $(( dyn_buf / 3 )) ]  && g_buf=$(( dyn_buf / 3 ))   # 不超过 dyn_buf 的 1/3       
+    g_buf=$(( dyn_buf / 6 ))    
     # 5. 确定系统全局 UDP 限制
     max_udp_pages=$(( max_udp_mb << 8 ))
     local udp_min_floor=$(( max_udp_pages * 30 / 100 ))
