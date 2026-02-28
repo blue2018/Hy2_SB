@@ -373,7 +373,8 @@ apply_userspace_adaptive_profile() {
         info "Runtime → 激进回收模式 (100M- 适配版)"
     else
         export GOMAXPROCS="$g_procs"
-        export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+        if [ "$real_c" -le 1 ]; then export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+		else export GODEBUG="madvdontneed=1"; fi
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
@@ -390,8 +391,6 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
-    # 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
-    [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
 
@@ -625,7 +624,7 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = $([ "$mem_total" -ge 100 ] && echo "131072" || echo "16384")   # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = $([ "$mem_total" -ge 100 ] && echo "131072" || echo "65536")   # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
@@ -776,20 +775,20 @@ EOF
 # 服务配置
 # ==========================================
 setup_service() {
-    local real_c="$CPU_CORE" core_range="" pid=""
+    local real_c="$CPU_CORE" core_range="" pid="" sb_exec=""
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
-    local mem_total=$(probe_memory_total); local io_prio=4
+    local mem_total=$(probe_memory_total); local io_prio=4; local final_nice="$cur_nice"
     [ "$real_c" -le 1 ] && core_range="0" || core_range="0-$((real_c - 1))"
     [ "$mem_total" -ge 450 ] && [ "$io_class" = "realtime" ] && io_prio=0 || io_prio=4
     [ "$mem_total" -lt 200 ] && io_prio=7
-    local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
     if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
+		if [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1; then sb_exec="taskset -c ${core_range} /usr/bin/sing-box"; else sb_exec="/usr/bin/sing-box"; fi
         cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
@@ -800,7 +799,7 @@ respawn_max=5
 respawn_period=60
 [ -f /etc/sing-box/env ] && . /etc/sing-box/env
 export GOTRACEBACK=none
-command="/usr/bin/sing-box"
+command="${sb_exec}"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
@@ -867,6 +866,7 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
