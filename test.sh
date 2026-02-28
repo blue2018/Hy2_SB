@@ -953,6 +953,7 @@ display_system_status() {
     local CWND_LBL=$(echo "$ROUTE_DEF" | grep -q "initcwnd" && echo "(已优化)" || echo "(默认)")
     local SBOX_PID=$(pgrep sing-box | head -n1)
     local NI_VAL="(未探测)"; local NI_LBL=""
+	
     if [ -n "$SBOX_PID" ] && [ -f "/proc/$SBOX_PID/stat" ]; then
         NI_VAL=$(cat "/proc/$SBOX_PID/stat" | awk '{print $19}')
         [ "$NI_VAL" -lt 0 ] && NI_LBL="(进程优先)" || { [ "$NI_VAL" -gt 0 ] && NI_LBL="(低优先级)" || NI_LBL="(默认)"; }
