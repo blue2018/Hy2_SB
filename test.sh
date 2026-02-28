@@ -349,7 +349,7 @@ safe_rtt() {
     rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
     # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -le 16384 ] && factor=12
+        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
         rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
     # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
