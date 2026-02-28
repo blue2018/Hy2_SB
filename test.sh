@@ -483,7 +483,7 @@ optimize_system() {
         VAR_HY2_BW="500"; max_udp_mb=$((mem_total * 60 / 100))
         SBOX_GOLIMIT="$((mem_total * 75 / 100))MiB"; SBOX_GOGC="150"
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
-        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=33554432
+        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
 		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
