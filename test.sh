@@ -605,9 +605,9 @@ net.core.default_qdisc = fq                # BBR必备调度规则
 net.core.netdev_budget = $net_bgt          # 调度预算 (单次轮询处理包数)
 net.core.netdev_budget_usecs = $net_usc    # 调度时长 (单次轮询微秒上限)
 net.core.netdev_tstamp_prequeue = 0        # 禁用时间戳预处理 (降延迟)
-net.ipv4.tcp_keepalive_time = 60           # 60s 无数据开始探测 (防NAT断流)
-net.ipv4.tcp_keepalive_intvl = 20          # 每 20s 探测一次
-net.ipv4.tcp_keepalive_probes = 3          # 连续 3 次无响应视为断线
+net.ipv4.tcp_keepalive_time = 30           # 30s 无数据开始探测 (防NAT断流)
+net.ipv4.tcp_keepalive_intvl = 5           # 每 5s 探测一次
+net.ipv4.tcp_keepalive_probes = 3          # 连续 3 次无响应视为断线，总窗口 45s
 
 # === 三、 协议栈缓冲与自适应加速 (TCP/UDP/BBR/MTU) ===
 # --- 全局缓冲区限制 ---
@@ -752,10 +752,10 @@ create_config() {
     local ARGO_IN=""
     if [ -n "$A_TOKEN" ] && [ -n "$A_DOMAIN" ] && [ "${USE_EXTERNAL_ARGO:-false}" = "true" ]; then
         ARGO_IN=$(printf ',{
-          "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001,
-          "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
-          "transport": { "type": "httpupgrade", "host": "%s" }
-        }' "$PSK" "$A_DOMAIN")
+		  "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001, "tcp_fast_open": true, "tcp_multi_path": true,
+		  "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
+		  "transport": { "type": "httpupgrade", "host": "%s" }
+		}' "$PSK" "$A_DOMAIN")
     fi
     
     # 写入 Sing-box 配置文件
@@ -871,7 +871,7 @@ EOF
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
-	    local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 20s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
