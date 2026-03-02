@@ -349,7 +349,7 @@ safe_rtt() {
     rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
     # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -le 16384 ] && factor=12
+        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
         rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
     # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
@@ -373,7 +373,8 @@ apply_userspace_adaptive_profile() {
         info "Runtime → 激进回收模式 (100M- 适配版)"
     else
         export GOMAXPROCS="$g_procs"
-        export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+        if [ "$real_c" -le 1 ]; then export GODEBUG="madvdontneed=1,asyncpreemptoff=1"
+		else export GODEBUG="madvdontneed=1"; fi
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
@@ -390,8 +391,6 @@ SINGBOX_UDP_SENDBUF=$buf
 VAR_HY2_BW=$VAR_HY2_BW
 EOF
     chmod 644 /etc/sing-box/env
-    # 4. CPU 亲和力 (仅多核且存在 taskset 时优化)
-    [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1 && taskset -pc 0-$((real_c - 1)) $$ >/dev/null 2>&1
     info "Runtime → GOMAXPROCS: $GOMAXPROCS 核 | 内存限额: $GOMEMLIMIT | GOGC: $GOGC | Buffer: $((buf/1024)) KB"
 }
 
@@ -469,7 +468,7 @@ service_ctrl() {
 optimize_system() {
     local rtt_res=($(probe_network_rtt)); local mem_total=$(probe_memory_total)
 	local rtt_avg="${rtt_res[0]:-150}" real_rtt_factors="${rtt_res[1]:-130}" loss_compensation="${rtt_res[2]:-100}"
-    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30
+    local real_c="$CPU_CORE" ct_max=16384 ct_udp_to=30 ct_stream_to=30 output_limit=262144
     local dyn_buf g_procs g_wnd g_buf net_bgt net_usc tcp_rmem_max target_qlen t_usc ring
     local max_udp_mb max_udp_pages udp_mem_global_min udp_mem_global_pressure udp_mem_global_max
     local swappiness_val="${SWAPPINESS_VAL:-10}" busy_poll_val="${BUSY_POLL_VAL:-0}"
@@ -482,34 +481,34 @@ optimize_system() {
         VAR_HY2_BW="500"; max_udp_mb=$((mem_total * 60 / 100))
         SBOX_GOLIMIT="$((mem_total * 75 / 100))MiB"; SBOX_GOGC="150"
         SBOX_MEM_HIGH="$((mem_total * 85 / 100))M"; SBOX_MEM_MAX="$((mem_total * 95 / 100))M"
-        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=16777216
+        VAR_SYSTEMD_NICE="-15"; VAR_SYSTEMD_IOSCHED="realtime"; tcp_rmem_max=33554432
         g_procs=$real_c; swappiness_val=10; busy_poll_val=50; ct_max=65535; ct_stream_to=60
-		target_qlen=10000; t_usc=100; ring=2048
+		target_qlen=10000; t_usc=100; ring=2048; output_limit=4194304
         SBOX_OPTIMIZE_LEVEL="512M 旗舰版"
     elif [ "$mem_total" -ge 200 ]; then
         VAR_HY2_BW="300"; max_udp_mb=$((mem_total * 55 / 100))
         SBOX_GOLIMIT="$((mem_total * 73 / 100))MiB"; SBOX_GOGC="100"
         SBOX_MEM_HIGH="$((mem_total * 83 / 100))M"; SBOX_MEM_MAX="$((mem_total * 93 / 100))M"
-        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
+        VAR_SYSTEMD_NICE="-10"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=16777216
         g_procs=$real_c; swappiness_val=10; busy_poll_val=20; ct_max=32768; ct_stream_to=45
-		target_qlen=8000;  t_usc=150; ring=1024
+		target_qlen=8000; t_usc=150; ring=1024; output_limit=2097152
         SBOX_OPTIMIZE_LEVEL="256M 增强版"
     elif [ "$mem_total" -ge 100 ]; then
         VAR_HY2_BW="200"; max_udp_mb=$((mem_total * 50 / 100))
         SBOX_GOLIMIT="$((mem_total * 70 / 100))MiB"; SBOX_GOGC="70"
         SBOX_MEM_HIGH="$((mem_total * 80 / 100))M"; SBOX_MEM_MAX="$((mem_total * 90 / 100))M"
-        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
+        VAR_SYSTEMD_NICE="-8"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=8388608
         swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
         [ "$real_c" -gt 2 ] && g_procs=2 || g_procs=$real_c
-		target_qlen=5000;  t_usc=150; ring=1024
+		target_qlen=5000; t_usc=150; ring=1024; output_limit=1048576
         SBOX_OPTIMIZE_LEVEL="128M 紧凑版"
     else
         VAR_HY2_BW="100"; max_udp_mb=$((mem_total * 45 / 100)) 
         SBOX_GOLIMIT="$((mem_total * 65 / 100))MiB"; SBOX_GOGC="50"
         SBOX_MEM_HIGH="$((mem_total * 75 / 100))M"; SBOX_MEM_MAX="$((mem_total * 85 / 100))M"
-        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=2097152
+        VAR_SYSTEMD_NICE="-5"; VAR_SYSTEMD_IOSCHED="best-effort"; tcp_rmem_max=4194304
         g_procs=1; swappiness_val=10; busy_poll_val=0; ct_max=16384; ct_stream_to=30
-		target_qlen=2000;  t_usc=250; ring=512
+		target_qlen=2000; t_usc=250; ring=512
         SBOX_OPTIMIZE_LEVEL="64M 激进版"
     fi
 
@@ -606,9 +605,9 @@ net.core.default_qdisc = fq                # BBR必备调度规则
 net.core.netdev_budget = $net_bgt          # 调度预算 (单次轮询处理包数)
 net.core.netdev_budget_usecs = $net_usc    # 调度时长 (单次轮询微秒上限)
 net.core.netdev_tstamp_prequeue = 0        # 禁用时间戳预处理 (降延迟)
-net.ipv4.tcp_keepalive_time = 60           # 60s 无数据开始探测 (防NAT断流)
-net.ipv4.tcp_keepalive_intvl = 10          # 每 10s 探测一次
-net.ipv4.tcp_keepalive_probes = 3          # 连续 3 次无响应视为断线
+net.ipv4.tcp_keepalive_time = 30           # 30s 无数据开始探测 (防NAT断流)
+net.ipv4.tcp_keepalive_intvl = 5           # 每 5s 探测一次
+net.ipv4.tcp_keepalive_probes = 3          # 连续 3 次无响应视为断线，总窗口 45s
 
 # === 三、 协议栈缓冲与自适应加速 (TCP/UDP/BBR/MTU) ===
 # --- 全局缓冲区限制 ---
@@ -625,12 +624,12 @@ net.ipv4.tcp_wmem = 4096 65536 $tcp_rmem_max   # TCP 写缓存动态范围
 net.ipv4.tcp_congestion_control = $tcp_cca # 拥塞算法 (BBR/Cubic)
 net.ipv4.tcp_no_metrics_save = 1           # 实时探测不记忆旧值
 net.ipv4.tcp_fastopen = 3                  # 开启 TCP 快开 (降首包延迟)
-net.ipv4.tcp_notsent_lowat = 16384         # 限制发送队列 (防延迟抖动)
+net.ipv4.tcp_notsent_lowat = $([ "$mem_total" -ge 100 ] && echo "131072" || echo "65536")   # 限制发送队列 (防延迟抖动)
 net.ipv4.tcp_mtu_probing = 1               # MTU自动探测 (防UDP黑洞)
 net.ipv4.ip_no_pmtu_disc = 0               # 启用路径MTU探测 (寻找最优包大小)
 net.ipv4.tcp_frto = 2                      # 丢包环境重传判断优化
 net.ipv4.tcp_slow_start_after_idle = 0     # 闲置后慢启动开关
-net.ipv4.tcp_limit_output_bytes = $([ "$mem_total" -ge 200 ] && echo "262144" || echo "131072") # 限制TCP连接占用发送队列
+net.ipv4.tcp_limit_output_bytes = $output_limit  # 限制TCP连接占用发送队列
 net.ipv4.udp_gro_enabled = 1               # UDP 分段聚合 (降CPU负载)
 net.ipv4.udp_early_demux = 1               # UDP 早期路由优化
 net.ipv4.udp_l4_early_demux = 1            # UDP 四层早期分流
@@ -653,7 +652,7 @@ $([ "$mem_total" -lt 100 ] && cat <<LOWMEM
 net.ipv4.tcp_sack = 1                      # 禁用SACK (省内存)
 net.ipv4.tcp_dsack = 1                     # 禁用D-SACK
 net.ipv4.tcp_timestamps = 1                # 禁用时间戳 (省包头开销)
-net.ipv4.tcp_moderate_rcvbuf = 1           # 锁定手动缓冲区 (防内核抢占)
+net.ipv4.tcp_moderate_rcvbuf = 1           # 用接收缓冲区自动调优 (内核根据路径动态调整)
 net.ipv4.tcp_max_syn_backlog = 512         # 缩减握手队列
 LOWMEM
 )
@@ -721,11 +720,10 @@ create_config() {
     mkdir -p /etc/sing-box
     local ds="ipv4_only"; local PSK=""; 
     [ "${IS_V6_OK:-false}" = "true" ] && ds="prefer_ipv4"
-	
     local mem_total=$(probe_memory_total); : ${mem_total:=64}; local timeout="30s"
-    local dns_srv='{"tag":"cloudflare-doh","type":"udp","server":"1.1.1.1"},{"tag":"google-doh","type":"udp","server":"8.8.8.8"}'
+	local dns_srv='{"tag":"cloudflare-doh","type":"udp","server":"1.1.1.1"},{"tag":"google-doh","type":"udp","server":"8.8.8.8"}'
     [ "$mem_total" -ge 100 ] && timeout="40s" && dns_srv='{"tag":"cloudflare-doh","type":"https","server":"1.1.1.1"},{"tag":"google-doh","type":"https","server":"8.8.8.8"}'
-    [ "$mem_total" -ge 200 ] && timeout="60s"; [ "$mem_total" -ge 450 ] && timeout="80s"
+	[ "$mem_total" -ge 200 ] && timeout="60s"; [ "$mem_total" -ge 450 ] && timeout="80s"
 
     # 端口和 PSK (密码) 确定逻辑
     if [ -z "$PORT_HY2" ]; then
@@ -754,9 +752,9 @@ create_config() {
     local ARGO_IN=""
     if [ -n "$A_TOKEN" ] && [ -n "$A_DOMAIN" ] && [ "${USE_EXTERNAL_ARGO:-false}" = "true" ]; then
         ARGO_IN=$(printf ',{
-          "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001,
-          "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
-          "transport": { "type": "httpupgrade", "host": "%s" }
+		  "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001, "tcp_fast_open": true, "tcp_multi_path": true,
+		  "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
+		  "transport": { "type": "httpupgrade", "host": "%s" }
         }' "$PSK" "$A_DOMAIN")
     fi
     
@@ -777,23 +775,20 @@ EOF
 # 服务配置
 # ==========================================
 setup_service() {
-    local real_c="$CPU_CORE" core_range="" pid=""
+    local real_c="$CPU_CORE" core_range="" pid="" sb_exec=""
     local taskset_bin=$(command -v taskset 2>/dev/null || echo "taskset")
     local ionice_bin=$(command -v ionice 2>/dev/null || echo "")
     local cur_nice="${VAR_SYSTEMD_NICE:--5}"; local io_class="${VAR_SYSTEMD_IOSCHED:-best-effort}"
-    local mem_total=$(probe_memory_total); local io_prio=4
+    local mem_total=$(probe_memory_total); local io_prio=4; local final_nice="$cur_nice"
     [ "$real_c" -le 1 ] && core_range="0" || core_range="0-$((real_c - 1))"
     [ "$mem_total" -ge 450 ] && [ "$io_class" = "realtime" ] && io_prio=0 || io_prio=4
     [ "$mem_total" -lt 200 ] && io_prio=7
-    local final_nice="$cur_nice"
     info "配置服务 (核心: $real_c | 绑定: $core_range | Nice预设: $cur_nice)..."
 	
-    if ! renice "$cur_nice" $$ >/dev/null 2>&1; then
-        warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)"
-        final_nice=0
-    fi
+    if ! renice "$cur_nice" $$ >/dev/null 2>&1; then warn "当前环境禁止高优先级调度，已自动回退至默认权重 (Nice 0)" && final_nice=0; fi
     if [ "$OS" = "alpine" ]; then
         command -v taskset >/dev/null || apk add --no-cache util-linux >/dev/null 2>&1
+		if [ "$real_c" -gt 1 ] && command -v taskset >/dev/null 2>&1; then sb_exec="taskset -c ${core_range} /usr/bin/sing-box"; else sb_exec="/usr/bin/sing-box"; fi
         cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
@@ -804,7 +799,7 @@ respawn_max=5
 respawn_period=60
 [ -f /etc/sing-box/env ] && . /etc/sing-box/env
 export GOTRACEBACK=none
-command="/usr/bin/sing-box"
+command="${sb_exec}"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
@@ -861,10 +856,8 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload >/dev/null 2>&1
         systemctl enable sing-box >/dev/null 2>&1 || true
-        sync   # 确保环境文件与服务配置落盘
-		(systemctl restart sing-box >/dev/null 2>&1 || true) &
-    fi
-    set +e     # 关闭 set -e，这是防止脚本在 pidof 失败时直接退出的关键核心
+        sync; (systemctl restart sing-box >/dev/null 2>&1 || true) &
+    fi; set +e
 	for i in {1..40}; do
         pid=$(pgrep -x "sing-box" 2>/dev/null | head -n 1)
         [ -z "${pid}" ] && pid=$(pgrep -f "sing-box run" | awk '{print $1}' | head -n 1)
@@ -873,13 +866,15 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	
 	# 双进程外部 Argo 拉起逻辑
-    if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
+	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
-	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="40MiB" || cf_memlimit="30MiB"
-	    GOGC=30 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS="${CPU_CORE:-1}" nohup /usr/local/bin/cloudflared tunnel \
-	        --protocol http2 --edge-ip-version auto --no-autoupdate --heartbeat-interval 10s --heartbeat-count 2 \
-	        run --token "${ARGO_TOKEN}" >/dev/null 2>&1 &
+	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
+		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
+	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
+	    sh -c "$cf_cmd" &
 	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
@@ -888,7 +883,7 @@ EOF
         err "服务拉起超时，请检查日志："
         [ "$OS" = "alpine" ] && { [ -f /var/log/messages ] && tail -n 10 /var/log/messages || logread | tail -n 10; } || journalctl -u sing-box -n 10 --no-pager 2>/dev/null
         set -e; exit 1
-    fi; set -e
+    fi;	set -e
 }
 
 # ==========================================
@@ -925,7 +920,7 @@ display_links() {
     local p_text="\033[1;33m${RAW_PORT:-"未知"}\033[0m" s_text="\033[1;33moffline\033[0m" p_icon="\033[1;31m[✖]\033[0m" s_icon="\033[1;31m[✖]\033[0m"
 
     # 状态检测
-    pgrep sing-box >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep cloudflared >/dev/null 2>&1; } && s_text="\033[1;33monline\033[0m" && s_icon="\033[1;32m[✔]\033[0m"
+	pgrep -x "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; } && { s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; }
     _do_probe_raw() { [ -z "$1" ] && return; (nc -z -u -w 1 "$1" "$RAW_PORT" || { sleep 0.2; nc -z -u -w 1 "$1" "$RAW_PORT"; }) >/dev/null 2>&1 && echo "OK" || echo "FAIL"; }
     if command -v nc >/dev/null 2>&1; then
         _do_probe_raw "${RAW_IP4:-}" > /tmp/sb_v4_res 2>&1 & _do_probe_raw "${RAW_IP6:-}" > /tmp/sb_v6_res 2>&1 &
