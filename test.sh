@@ -754,8 +754,8 @@ create_config() {
         ARGO_IN=$(printf ',{
 		  "type": "vless", "tag": "vless-argo-in", "listen": "127.0.0.1", "listen_port": 8001, "tcp_fast_open": true, "tcp_multi_path": true,
 		  "users": [ { "uuid": "%s", "flow": "" } ], "tls": { "enabled": false },
-		  "transport": { "type": "httpupgrade" }
-		}' "$PSK")
+		  "transport": { "type": "httpupgrade", "host": "%s" }
+        }' "$PSK" "$A_DOMAIN")
     fi
     
     # 写入 Sing-box 配置文件
