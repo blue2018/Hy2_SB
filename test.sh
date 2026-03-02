@@ -871,7 +871,7 @@ EOF
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
-		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
+		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol h2mux --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
 	    sh -c "$cf_cmd" &
