@@ -344,21 +344,51 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 1024 * loss_compensation / 100 ))
-    # 1. 基础仲裁
-    rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
-    # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
-    if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
-        rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
-    else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
-    # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
-    rtt_scale_pressure=$(( rtt_scale_max * 90 / 100 )); rtt_scale_min=$(( rtt_scale_max * 75 / 100 ))
-    # 4. 档位钳位与物理上限终极对齐 (确保不穿透物理防线)
-    [ "$rtt_scale_max" -gt "$max_udp_pages" ] && { rtt_scale_max=$max_udp_pages; rtt_scale_pressure=$(( max_udp_pages * 95 / 100 )); rtt_scale_min=$(( max_udp_pages * 80 / 100 )); }
-    rtt_scale_max=$(( rtt_scale_max < udp_max ? rtt_scale_max : udp_max ))
-    rtt_scale_pressure=$(( rtt_scale_pressure < udp_pre ? rtt_scale_pressure : udp_pre ))
-    rtt_scale_min=$(( rtt_scale_min < udp_min ? rtt_scale_min : udp_min ))
+    local bw="${VAR_HY2_BW:-200}"
+    # BDP锚点：带宽(Mbps)×RTT补偿(ms) → 字节 → 页
+    # 系数3：覆盖多连接并发重传窗口（单连接1.5x × 并发因子2）
+    local bdp_pages=$(( bw * 125000 * real_rtt_factors / 1000 * 3 / 4096 ))
+    [ "$bdp_pages" -lt 512 ] && bdp_pages=512   # 兜底2MB，防零值
+    # dyn_buf换算为页，取BDP与动态缓冲的较大值作为基准
+    local dyn_pages=$(( dyn_buf / 4096 ))
+    local base=$(( bdp_pages > dyn_pages ? bdp_pages : dyn_pages ))
+    # RTT线性修正系数(×10整数运算)：
+    # ≤80ms→1.0，80-150ms→1.0~1.3，150-300ms→1.3~1.6，>300ms→1.6封顶
+    # 小内存(<64MB等效页)系数上限1.3，避免把仅有的内存全塞给UDP缓冲
+    local fn
+    if   [ "$rtt_val" -le 80 ];  then fn=10
+    elif [ "$rtt_val" -le 150 ]; then fn=$(( 10 + (rtt_val -  80) * 3 / 70 ))
+    elif [ "$rtt_val" -le 300 ]; then fn=$(( 13 + (rtt_val - 150) * 3 / 150 ))
+    else fn=16; fi
+    [ "$max_udp_pages" -lt 16384 ] && [ "$fn" -gt 13 ] && fn=13
+    local scaled=$(( base * fn / 10 ))
+    # 丢包补偿：还原实际丢包率(0~20)，动态调整压力线和最小线
+    # 丢包越高：压力线下移(给重传更多无压力空间)，最小线也下移(释放更多免费区)
+    local loss_pct=$(( (loss_compensation - 100) / 5 ))
+    local pr=$(( 82 - loss_pct ))    # 压力线：82%→72%，比原版90%低，减少主动回收触发
+    local mn=$(( 60 - loss_pct * 2 )) # 最小线：60%→40%，给重传保留充足免费缓冲
+    [ "$pr" -lt 68 ] && pr=68
+    [ "$mn" -lt 38 ] && mn=38
+    local s_pre=$(( scaled * pr / 100 ))
+    local s_min=$(( scaled * mn / 100 ))
+    # 统一钳位：先锁max，pressure/min基于锁后的max派生，严格保证 min<pressure<max
+    [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages
+    [ "$scaled" -gt "$udp_max"       ] && scaled=$udp_max
+    # pressure/min不独立与传入基线比较，而是基于final_max重算
+    # 防止三档独立钳位后出现 min>pressure 的非单调写入
+    s_pre=$(( scaled * pr / 100 ))
+    s_min=$(( scaled * mn / 100 ))
+    # 最终断言：绝对单调性保障
+    [ "$s_min" -lt 64 ]          && s_min=64
+    [ "$s_pre" -le "$s_min" ]    && s_pre=$(( s_min + 64 ))
+    [ "$scaled" -le "$s_pre" ]   && scaled=$(( s_pre + 64 ))
+    rtt_scale_max=$scaled
+    rtt_scale_pressure=$s_pre
+    rtt_scale_min=$s_min
+    # 档位标记
+    if   [ "$rtt_val" -le 80 ];  then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"
+    elif [ "$rtt_val" -le 200 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC巡航)"
+    else                               SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"; fi
 }
 
 # sing-box 用户态运行时调度人格（Go/QUIC/缓冲区自适应）
