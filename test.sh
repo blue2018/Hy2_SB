@@ -355,10 +355,8 @@ safe_rtt() {
     # 3. 物理防线双重钳位
     [ "$RTT_SCALE_MAX" -gt "$max_udp_pages" ] && RTT_SCALE_MAX=$max_udp_pages
     [ "$RTT_SCALE_MAX" -gt "$udp_max" ] && RTT_SCALE_MAX=$udp_max
-    # 4. 三级梯度生成
-    RTT_SCALE_PRESSURE=$(( RTT_SCALE_MAX * 90 / 100 ))
-    RTT_SCALE_MIN=$(( RTT_SCALE_MAX * 75 / 100 ))
-    # 5. 最终一致性与边界保底
+    RTT_SCALE_PRESSURE=$(( RTT_SCALE_MAX * 90 / 100 )); RTT_SCALE_MIN=$(( RTT_SCALE_MAX * 75 / 100 ))
+    # 4. 最终一致性与边界保底
     [ "$RTT_SCALE_MIN" -lt "$udp_min" ] && RTT_SCALE_MIN=$udp_min
     [ "$RTT_SCALE_PRESSURE" -le "$RTT_SCALE_MIN" ] && RTT_SCALE_PRESSURE=$(( RTT_SCALE_MIN + 1024 ))
     [ "$RTT_SCALE_MAX" -le "$RTT_SCALE_PRESSURE" ] && RTT_SCALE_MAX=$(( RTT_SCALE_PRESSURE + 1024 ))
@@ -381,7 +379,6 @@ apply_userspace_adaptive_profile() {
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
-	
     export GOMEMLIMIT GOGC SINGBOX_QUIC_MAX_CONN_WINDOW="$wnd" VAR_HY2_BW="${VAR_HY2_BW:-200}" SINGBOX_UDP_RECVBUF="$buf" SINGBOX_UDP_SENDBUF="$buf"
     mkdir -p /etc/sing-box; cat > /etc/sing-box/env <<EOF
 GOMAXPROCS=$GOMAXPROCS
