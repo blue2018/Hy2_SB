@@ -346,20 +346,20 @@ safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
     local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 128 * loss_compensation / 100 ))
     # 1. 基础仲裁
-    RTT_SCALE_MAX=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
+    if [ "$probe_pages" -gt "$dyn_pages" ]; then RTT_SCALE_MAX=$probe_pages; else RTT_SCALE_MAX=$dyn_pages; fi
     # 2. 动态补偿与档位判定
     if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
+        local factor=15; if [ "$max_udp_pages" -lt 16384 ]; then factor=12; fi
         RTT_SCALE_MAX=$(( RTT_SCALE_MAX * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (远航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (竞速)"; fi
     # 3. 物理防线双重钳位
-    [ "$RTT_SCALE_MAX" -gt "$max_udp_pages" ] && RTT_SCALE_MAX=$max_udp_pages
-    [ "$RTT_SCALE_MAX" -gt "$udp_max" ] && RTT_SCALE_MAX=$udp_max
+    if [ "$RTT_SCALE_MAX" -gt "$max_udp_pages" ]; then RTT_SCALE_MAX=$max_udp_pages; fi
+    if [ "$RTT_SCALE_MAX" -gt "$udp_max" ]; then RTT_SCALE_MAX=$udp_max; fi
     RTT_SCALE_PRESSURE=$(( RTT_SCALE_MAX * 90 / 100 )); RTT_SCALE_MIN=$(( RTT_SCALE_MAX * 75 / 100 ))
     # 4. 最终一致性与边界保底
-    [ "$RTT_SCALE_MIN" -lt "$udp_min" ] && RTT_SCALE_MIN=$udp_min
-    [ "$RTT_SCALE_PRESSURE" -le "$RTT_SCALE_MIN" ] && RTT_SCALE_PRESSURE=$(( RTT_SCALE_MIN + 1024 ))
-    [ "$RTT_SCALE_MAX" -le "$RTT_SCALE_PRESSURE" ] && RTT_SCALE_MAX=$(( RTT_SCALE_PRESSURE + 1024 ))
+    if [ "$RTT_SCALE_MIN" -lt "$udp_min" ]; then RTT_SCALE_MIN=$udp_min; fi
+    if [ "$RTT_SCALE_PRESSURE" -le "$RTT_SCALE_MIN" ]; then RTT_SCALE_PRESSURE=$(( RTT_SCALE_MIN + 1024 )); fi
+    if [ "$RTT_SCALE_MAX" -le "$RTT_SCALE_PRESSURE" ]; then RTT_SCALE_MAX=$(( RTT_SCALE_PRESSURE + 1024 )); fi
 }
 
 # sing-box 用户态运行时调度人格（Go/QUIC/缓冲区自适应）
@@ -379,6 +379,7 @@ apply_userspace_adaptive_profile() {
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
+	
     export GOMEMLIMIT GOGC SINGBOX_QUIC_MAX_CONN_WINDOW="$wnd" VAR_HY2_BW="${VAR_HY2_BW:-200}" SINGBOX_UDP_RECVBUF="$buf" SINGBOX_UDP_SENDBUF="$buf"
     mkdir -p /etc/sing-box; cat > /etc/sing-box/env <<EOF
 GOMAXPROCS=$GOMAXPROCS
