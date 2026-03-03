@@ -365,7 +365,7 @@ safe_rtt() {
     [ "$s_pre" -le "$s_min" ] && s_pre=$(( s_min + 64 ))
     [ "$scaled" -le "$s_pre" ] && scaled=$(( s_pre + 64 ))
     # 6. 全局变量精确导出
-    RTT_SCALE_MAX=$scaled; RTT_SCALE_PRESSUR=$s_pre; RTT_SCALE_MIN=$s_min
+    RTT_SCALE_MAX=$scaled; RTT_SCALE_PRESSURE=$s_pre; RTT_SCALE_MIN=$s_min
     # 7. 状态标签注入
     if [ "$rtt_val" -le 80 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"
     elif [ "$rtt_val" -le 200 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC巡航)"
@@ -565,7 +565,7 @@ optimize_system() {
     if [ "$mem_total" -gt 100 ]; then [ "$min_free_val" -gt 65536 ] && min_free_val=65536; fi
 	# 9. 路况仲裁
     safe_rtt "$dyn_buf" "$rtt_avg" "$max_udp_pages" "$udp_mem_global_min" "$udp_mem_global_pressure" "$udp_mem_global_max" "$real_rtt_factors" "$loss_compensation"
-    UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSUR $RTT_SCALE_MAX"
+    UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSURE $RTT_SCALE_MAX"
 	apply_initcwnd_optimization "false"
     apply_userspace_adaptive_profile "$g_procs" "$g_wnd" "$g_buf" "$real_c" "$mem_total"
     apply_nic_core_boost "$real_c" "$net_bgt" "$net_usc" "$mem_total" "$target_qlen" "$t_usc" "$ring"
