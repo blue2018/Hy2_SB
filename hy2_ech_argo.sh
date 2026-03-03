@@ -554,7 +554,9 @@ optimize_system() {
     [ "$min_free_val" -lt 4608 ] && min_free_val=4608      
     if [ "$mem_total" -gt 100 ]; then [ "$min_free_val" -gt 65536 ] && min_free_val=65536; fi
 	# 9. 路况仲裁
+	echo "1"
     safe_rtt "$dyn_buf" "$rtt_avg" "$max_udp_pages" "$udp_mem_global_min" "$udp_mem_global_pressure" "$udp_mem_global_max" "$real_rtt_factors" "$loss_compensation"
+	echo "2"
     UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSUR $RTT_SCALE_MAX"
 	apply_initcwnd_optimization "false"
     apply_userspace_adaptive_profile "$g_procs" "$g_wnd" "$g_buf" "$real_c" "$mem_total"
