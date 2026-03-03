@@ -359,14 +359,14 @@ safe_rtt() {
     # 4. 物理上限钳位
     [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages
     [ "$scaled" -gt "$udp_max" ] && scaled=$udp_max
+	local scaled_min=$(( udp_min * 100 / mn )); [ "$scaled" -lt "$scaled_min" ] && scaled=$scaled_min
     s_pre=$(( scaled * pr / 100 )); s_min=$(( scaled * mn / 100 ))
     # 5. 一致性与边界保底 (确保参数合法性)
-    [ "$s_min" -lt "$udp_min" ] && s_min=$udp_min; [ "$s_min" -lt 64 ] && s_min=64
+    [ "$s_min" -lt 64 ] && s_min=64
     [ "$s_pre" -le "$s_min" ] && s_pre=$(( s_min + 64 ))
     [ "$scaled" -le "$s_pre" ] && scaled=$(( s_pre + 64 ))
     # 6. 全局变量精确导出
     RTT_SCALE_MAX=$scaled; RTT_SCALE_PRESSURE=$s_pre; RTT_SCALE_MIN=$s_min
-    # 7. 状态标签注入
     if [ "$rtt_val" -le 80 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"
     elif [ "$rtt_val" -le 200 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC巡航)"
     else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"; fi
