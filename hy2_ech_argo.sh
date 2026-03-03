@@ -344,22 +344,32 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 128 * loss_compensation / 100 ))
-    # 1. 基础仲裁
-    RTT_SCALE_MAX=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
-    # 2. 动态补偿与档位判定
-    if [ "$rtt_val" -ge 150 ]; then
-        local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
-        RTT_SCALE_MAX=$(( RTT_SCALE_MAX * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (远航)"
-    else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (竞速)"; fi
-    # 3. 物理防线双重钳位
-    [ "$RTT_SCALE_MAX" -gt "$max_udp_pages" ] && RTT_SCALE_MAX=$max_udp_pages
-    [ "$RTT_SCALE_MAX" -gt "$udp_max" ] && RTT_SCALE_MAX=$udp_max
-    RTT_SCALE_PRESSURE=$(( RTT_SCALE_MAX * 90 / 100 )); RTT_SCALE_MIN=$(( RTT_SCALE_MAX * 75 / 100 ))
-    # 4. 最终一致性与边界保底
-    [ "$RTT_SCALE_MIN" -lt "$udp_min" ] && RTT_SCALE_MIN=$udp_min
-    [ "$RTT_SCALE_PRESSURE" -le "$RTT_SCALE_MIN" ] && RTT_SCALE_PRESSURE=$(( RTT_SCALE_MIN + 1024 ))
-    [ "$RTT_SCALE_MAX" -le "$RTT_SCALE_PRESSURE" ] && RTT_SCALE_MAX=$(( RTT_SCALE_PRESSURE + 1024 ))
+    local bw="${VAR_HY2_BW:-200}" fn=10 pr=82 mn=60 s_pre s_min scaled
+    # 1. BDP 建模 (Mbps * 125000 / 4096 * RTT/1000 * 修正系数3)
+    local bdp_pages=$(( bw * 375 * real_rtt_factors / 4096 )); [ "$bdp_pages" -lt 512 ] && bdp_pages=512
+    local dyn_pages=$(( dyn_buf / 4096 )); local base=$(( bdp_pages > dyn_pages ? bdp_pages : dyn_pages ))
+    # 2. 分段线性补偿系数 (fn: 10~16)
+    if [ "$rtt_val" -le 80 ]; then fn=10; elif [ "$rtt_val" -le 150 ]; then fn=$(( 10 + (rtt_val - 80) * 3 / 70 ))
+    elif [ "$rtt_val" -le 300 ]; then fn=$(( 13 + (rtt_val - 150) * 3 / 150 )); else fn=16; fi
+    [ "$max_udp_pages" -lt 16384 ] && [ "$fn" -gt 13 ] && fn=13
+    scaled=$(( base * fn / 10 ))
+    # 3. 动态梯度计算 (pr: Pressure, mn: Min)
+    local loss_pct=$(( (loss_compensation - 100) / 5 )); pr=$(( 82 - loss_pct )); mn=$(( 60 - loss_pct * 2 ))
+    [ "$pr" -lt 68 ] && pr=68; [ "$mn" -lt 38 ] && mn=38
+    # 4. 物理上限钳位
+    [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages
+    [ "$scaled" -gt "$udp_max" ] && scaled=$udp_max
+    s_pre=$(( scaled * pr / 100 )); s_min=$(( scaled * mn / 100 ))
+    # 5. 一致性与边界保底 (确保参数合法性)
+    [ "$s_min" -lt "$udp_min" ] && s_min=$udp_min; [ "$s_min" -lt 64 ] && s_min=64
+    [ "$s_pre" -le "$s_min" ] && s_pre=$(( s_min + 64 ))
+    [ "$scaled" -le "$s_pre" ] && scaled=$(( s_pre + 64 ))
+    # 6. 全局变量精确导出
+    RTT_SCALE_MAX=$scaled; RTT_SCALE_PRESSUR=$s_pre; RTT_SCALE_MIN=$s_min
+    # 7. 状态标签注入
+    if [ "$rtt_val" -le 80 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"
+    elif [ "$rtt_val" -le 200 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC巡航)"
+    else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"; fi
 }
 
 # sing-box 用户态运行时调度人格（Go/QUIC/缓冲区自适应）
@@ -555,7 +565,7 @@ optimize_system() {
     if [ "$mem_total" -gt 100 ]; then [ "$min_free_val" -gt 65536 ] && min_free_val=65536; fi
 	# 9. 路况仲裁
     safe_rtt "$dyn_buf" "$rtt_avg" "$max_udp_pages" "$udp_mem_global_min" "$udp_mem_global_pressure" "$udp_mem_global_max" "$real_rtt_factors" "$loss_compensation"
-    UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSURE $RTT_SCALE_MAX"
+    UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSUR $RTT_SCALE_MAX"
 	apply_initcwnd_optimization "false"
     apply_userspace_adaptive_profile "$g_procs" "$g_wnd" "$g_buf" "$real_c" "$mem_total"
     apply_nic_core_boost "$real_c" "$net_bgt" "$net_usc" "$mem_total" "$target_qlen" "$t_usc" "$ring"
@@ -920,7 +930,7 @@ display_links() {
     local p_text="\033[1;33m${RAW_PORT:-"未知"}\033[0m" s_text="\033[1;33moffline\033[0m" p_icon="\033[1;31m[✖]\033[0m" s_icon="\033[1;31m[✖]\033[0m"
 
     # 状态检测
-    if pgrep -f "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; }; then s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; else s_text="\033[1;31moffline\033[0m"; s_icon="\033[1;31m[✘]\033[0m"; fi
+	if pgrep -f "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; }; then s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; else s_text="\033[1;31moffline\033[0m"; s_icon="\033[1;31m[✘]\033[0m"; fi
     _do_probe_raw() { [ -z "$1" ] && return; (nc -z -u -w 1 "$1" "$RAW_PORT" || { sleep 0.2; nc -z -u -w 1 "$1" "$RAW_PORT"; }) >/dev/null 2>&1 && echo "OK" || echo "FAIL"; }
     if command -v nc >/dev/null 2>&1; then
         _do_probe_raw "${RAW_IP4:-}" > /tmp/sb_v4_res 2>&1 & _do_probe_raw "${RAW_IP6:-}" > /tmp/sb_v6_res 2>&1 &
