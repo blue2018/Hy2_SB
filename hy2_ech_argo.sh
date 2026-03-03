@@ -344,21 +344,22 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 1024 * loss_compensation / 100 ))
+    local dyn_pages=$(( dyn_buf / 4096 )); local probe_pages=$(( real_rtt_factors * 128 * loss_compensation / 100 ))
     # 1. 基础仲裁
-    rtt_scale_max=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
-    # 2. 补偿逻辑 (增加小内存防溢出：100M- 小鸡 max_udp_pages 通常 < 16384)
+    RTT_SCALE_MAX=$(( probe_pages > dyn_pages ? probe_pages : dyn_pages ))
+    # 2. 动态补偿与档位判定
     if [ "$rtt_val" -ge 150 ]; then
         local factor=15; [ "$max_udp_pages" -lt 16384 ] && factor=12
-        rtt_scale_max=$(( rtt_scale_max * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC远航)"
-    else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"; fi
-    # 3. 三级梯度生成 (0.75 : 0.9 : 1.0)
-    rtt_scale_pressure=$(( rtt_scale_max * 90 / 100 )); rtt_scale_min=$(( rtt_scale_max * 75 / 100 ))
-    # 4. 档位钳位与物理上限终极对齐 (确保不穿透物理防线)
-    [ "$rtt_scale_max" -gt "$max_udp_pages" ] && { rtt_scale_max=$max_udp_pages; rtt_scale_pressure=$(( max_udp_pages * 95 / 100 )); rtt_scale_min=$(( max_udp_pages * 80 / 100 )); }
-    rtt_scale_max=$(( rtt_scale_max < udp_max ? rtt_scale_max : udp_max ))
-    rtt_scale_pressure=$(( rtt_scale_pressure < udp_pre ? rtt_scale_pressure : udp_pre ))
-    rtt_scale_min=$(( rtt_scale_min < udp_min ? rtt_scale_min : udp_min ))
+        RTT_SCALE_MAX=$(( RTT_SCALE_MAX * factor / 10 )); SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (远航)"
+    else SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (竞速)"; fi
+    # 3. 物理防线双重钳位
+    [ "$RTT_SCALE_MAX" -gt "$max_udp_pages" ] && RTT_SCALE_MAX=$max_udp_pages
+    [ "$RTT_SCALE_MAX" -gt "$udp_max" ] && RTT_SCALE_MAX=$udp_max
+    RTT_SCALE_PRESSURE=$(( RTT_SCALE_MAX * 90 / 100 )); RTT_SCALE_MIN=$(( RTT_SCALE_MAX * 75 / 100 ))
+    # 4. 最终一致性与边界保底
+    [ "$RTT_SCALE_MIN" -lt "$udp_min" ] && RTT_SCALE_MIN=$udp_min
+    [ "$RTT_SCALE_PRESSURE" -le "$RTT_SCALE_MIN" ] && RTT_SCALE_PRESSURE=$(( RTT_SCALE_MIN + 1024 ))
+    [ "$RTT_SCALE_MAX" -le "$RTT_SCALE_PRESSURE" ] && RTT_SCALE_MAX=$(( RTT_SCALE_PRESSURE + 1024 ))
 }
 
 # sing-box 用户态运行时调度人格（Go/QUIC/缓冲区自适应）
@@ -378,7 +379,6 @@ apply_userspace_adaptive_profile() {
         GOMEMLIMIT="${SBOX_GOLIMIT:-48MiB}"; GOGC="${SBOX_GOGC:-100}"
         info "Runtime → 性能优先模式"
     fi
-	
     export GOMEMLIMIT GOGC SINGBOX_QUIC_MAX_CONN_WINDOW="$wnd" VAR_HY2_BW="${VAR_HY2_BW:-200}" SINGBOX_UDP_RECVBUF="$buf" SINGBOX_UDP_SENDBUF="$buf"
     mkdir -p /etc/sing-box; cat > /etc/sing-box/env <<EOF
 GOMAXPROCS=$GOMAXPROCS
@@ -555,7 +555,7 @@ optimize_system() {
     if [ "$mem_total" -gt 100 ]; then [ "$min_free_val" -gt 65536 ] && min_free_val=65536; fi
 	# 9. 路况仲裁
     safe_rtt "$dyn_buf" "$rtt_avg" "$max_udp_pages" "$udp_mem_global_min" "$udp_mem_global_pressure" "$udp_mem_global_max" "$real_rtt_factors" "$loss_compensation"
-    UDP_MEM_SCALE="$rtt_scale_min $rtt_scale_pressure $rtt_scale_max"
+    UDP_MEM_SCALE="$RTT_SCALE_MIN $RTT_SCALE_PRESSURE $RTT_SCALE_MAX"
 	apply_initcwnd_optimization "false"
     apply_userspace_adaptive_profile "$g_procs" "$g_wnd" "$g_buf" "$real_c" "$mem_total"
     apply_nic_core_boost "$real_c" "$net_bgt" "$net_usc" "$mem_total" "$target_qlen" "$t_usc" "$ring"
@@ -920,7 +920,7 @@ display_links() {
     local p_text="\033[1;33m${RAW_PORT:-"未知"}\033[0m" s_text="\033[1;33moffline\033[0m" p_icon="\033[1;31m[✖]\033[0m" s_icon="\033[1;31m[✖]\033[0m"
 
     # 状态检测
-	if pgrep -f "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; }; then s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; else s_text="\033[1;31moffline\033[0m"; s_icon="\033[1;31m[✘]\033[0m"; fi
+    if pgrep -f "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; }; then s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; else s_text="\033[1;31moffline\033[0m"; s_icon="\033[1;31m[✘]\033[0m"; fi
     _do_probe_raw() { [ -z "$1" ] && return; (nc -z -u -w 1 "$1" "$RAW_PORT" || { sleep 0.2; nc -z -u -w 1 "$1" "$RAW_PORT"; }) >/dev/null 2>&1 && echo "OK" || echo "FAIL"; }
     if command -v nc >/dev/null 2>&1; then
         _do_probe_raw "${RAW_IP4:-}" > /tmp/sb_v4_res 2>&1 & _do_probe_raw "${RAW_IP6:-}" > /tmp/sb_v6_res 2>&1 &
