@@ -355,7 +355,7 @@ safe_rtt() {
     scaled=$(( base * fn / 10 ))
     # 3. 动态梯度计算 (pr: Pressure, mn: Min)
     local loss_pct=$(( (loss_compensation - 100) / 5 )); pr=$(( 82 - loss_pct )); mn=$(( 60 - loss_pct * 2 ))
-    [ "$pr" -lt 68 ] && pr=68; [ "$mn" -lt 38 ] && mn=38
+    [ "$pr" -lt 68 ] && pr=68; [ "$pr" -gt 82 ] && pr=82; [ "$mn" -lt 38 ] && mn=38; [ "$mn" -gt 60 ] && mn=60
     # 4. 物理上限钳位
     [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages
     [ "$scaled" -gt "$udp_max" ] && scaled=$udp_max
