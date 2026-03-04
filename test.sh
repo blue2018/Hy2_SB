@@ -882,9 +882,9 @@ EOF
 	    if command -v rc-service >/dev/null 2>&1; then
 	        local _cs; for _cs in dcron crond fcron; do rc-service "$_cs" start >/dev/null 2>&1 && { rc-update add "$_cs" default >/dev/null 2>&1; break; }; done
 	    else systemctl start crond cron 2>/dev/null || service cron start 2>/dev/null || true; fi
-	    local _cw="pgrep -f cloudflared >/dev/null 2>&1 || setsid sh -c '$cf_cmd' &"
+	    local _cw="pgrep -f cloudflared >/dev/null 2>&1 || nohup sh -c '$cf_cmd' >/dev/null 2>&1 &"
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * $_cw") | crontab -
-	    setsid sh -c "$cf_cmd" &
+	    (nohup sh -c "$cf_cmd" >/dev/null 2>&1 &)
 	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
