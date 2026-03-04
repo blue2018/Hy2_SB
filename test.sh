@@ -19,14 +19,13 @@ TLS_DOMAIN="$(pick_tls_domain)"
 # ==========================================
 info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }; warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }; err() { echo -e "\033[1;31m[ERR]\033[0m $*" >&2; }; succ() { echo -e "\033[1;32m[OK]\033[0m $*"; }
 
-# OSC 52 自动复制到剪贴板函数 (支持多行)
+# 自动复制到剪贴板函数 (支持多行)
 copy_to_clipboard() {
-    local content="$1"
-    if [ -n "${SSH_TTY:-}" ] || [ -n "${DISPLAY:-}" ]; then
-        local b64_content=$(printf "%b" "$content" | base64 | tr -d '\r\n')
-        echo -ne "\033]52;c;${b64_content}\a"
-        echo -e "\033[1;32m[复制]\033[0m 节点链接已推送至本地剪贴板"
-    fi
+    local b64=$(printf "%s" "$1" | base64 | tr -d '\r\n') osc52="\033]52;c;${b64}\a"
+    if [ -n "${TMUX:-}" ]; then printf "\ePtmux;\e%b\e\\" "$osc52"
+    elif [ -n "${STY:-}" ]; then printf "\eP%b\e\\" "$osc52"
+    else printf "%b" "$osc52"; fi
+    echo -e "\033[1;32m[复制]\033[0m 节点链接已推送至本地剪贴板"
 }
 
 # 侦测系统类型
@@ -874,6 +873,7 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
