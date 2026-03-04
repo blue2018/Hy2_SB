@@ -874,14 +874,17 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
+	
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
-		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
-	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
-	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
-	    sh -c "$cf_cmd" &
+	    printf '#!/bin/sh\npgrep -x cloudflared >/dev/null 2>&1 && exit 0\nGOGC=80 GOMEMLIMIT=%s GOMAXPROCS=%s TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token %s >/dev/null 2>&1 &\n' \
+	        "$cf_memlimit" "${CPU_CORE:-1}" "${ARGO_TOKEN}" > /usr/local/bin/argo-guard
+	    chmod +x /usr/local/bin/argo-guard
+	    [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1 || true
+	    (crontab -l 2>/dev/null | grep -v argo-guard; echo "* * * * * /usr/local/bin/argo-guard") | crontab -
+	    /usr/local/bin/argo-guard
 	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
@@ -1000,9 +1003,11 @@ EOF
         optimize_system install_singbox create_config setup_service apply_firewall service_ctrl info err warn succ
         apply_userspace_adaptive_profile apply_nic_core_boost verify_config
         setup_zrm_swap safe_rtt generate_cert setup_argo_logic)
+		
     for f in "${funcs[@]}"; do
         if declare -f "$f" >/dev/null 2>&1; then declare -f "$f" >> "$CORE_TMP"; echo "" >> "$CORE_TMP"; fi
     done
+	
     cat >> "$CORE_TMP" <<'EOF'
 detect_os; set +e
 apply_firewall
