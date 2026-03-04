@@ -880,7 +880,7 @@ EOF
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
 	    local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
 	    if command -v rc-service >/dev/null 2>&1; then
-	        local _cs; for _cs in dcron crond fcron; do rc-service "$_cs" start >/dev/null 2>&1 && { rc-update add "$_cs" default >/dev/null 2>&1; break; }; done
+	        local _cs; for _cs in dcron crond fcron; do rc-service "$_cs" start >/dev/null 2>&1 && { rc-update add "$_cs" default >/dev/null 2>&1; break; }; done || true
 	    else systemctl start crond cron 2>/dev/null || service cron start 2>/dev/null || true; fi
 	    local _cw="pgrep -f cloudflared >/dev/null 2>&1 || nohup sh -c '$cf_cmd' >/dev/null 2>&1 &"
 	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * $_cw") | crontab -
