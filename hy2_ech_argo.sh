@@ -21,11 +21,11 @@ info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }; warn() { echo -e "\033[1;33m[W
 
 # 自动复制到剪贴板函数 (支持多行)
 copy_to_clipboard() {
-    local b64=$(printf "%s" "$1" | base64 | tr -d '\r\n'); local osc52="\033]52;c;${b64}\a"
-    if [ -n "${TMUX:-}" ]; then printf "\ePtmux;\e%b\e\\" "$osc52"
-    elif [ -n "${STY:-}" ]; then printf "\eP%b\e\\" "$osc52"
-    else printf "%b" "$osc52"; fi
-    echo -e "\033[1;32m[复制]\033[0m 节点链接已推送至本地剪贴板"
+    local content="$1"; [ -z "$content" ] && return
+    local b64=$(echo -n "$content" | base64 | tr -d '\r\n')
+    if [ -n "$TMUX" ]; then echo -ne "\033Ptmux;\033\033]52;c;${b64}\a\033\\"
+    else echo -ne "\033]52;c;${b64}\a"; fi
+    echo -e "\033[1;32m[复制]\033[0m 内容已推送至剪贴板"
 }
 
 # 侦测系统类型
