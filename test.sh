@@ -927,7 +927,6 @@ display_links() {
     local RAW_SNI=$(grep -oE '"server_name":[[:space:]]*"[^"]+"' /etc/sing-box/config.json | head -n 1 | cut -d'"' -f4)
     local BASE_PARAM="sni=$RAW_SNI&alpn=h3&insecure=1${RAW_FP:+&pinsha256=$RAW_FP}${RAW_ECH:+&ech=$RAW_ECH}"
     local p_text="\033[1;33m${RAW_PORT:-"未知"}\033[0m" s_text="\033[1;33moffline\033[0m" p_icon="\033[1;31m[✖]\033[0m" s_icon="\033[1;31m[✖]\033[0m"
-
     # 状态检测
 	if pgrep -f "sing-box" >/dev/null 2>&1 && { [ "${USE_EXTERNAL_ARGO:-false}" != "true" ] || pgrep -f "cloudflared" >/dev/null 2>&1; }; then s_text="\033[1;33monline\033[0m"; s_icon="\033[1;32m[✔]\033[0m"; else s_text="\033[1;31moffline\033[0m"; s_icon="\033[1;31m[✘]\033[0m"; fi
     _do_probe_raw() { [ -z "$1" ] && return; (nc -z -u -w 1 "$1" "$RAW_PORT" || { sleep 0.2; nc -z -u -w 1 "$1" "$RAW_PORT"; }) >/dev/null 2>&1 && echo "OK" || echo "FAIL"; }
@@ -946,6 +945,7 @@ display_links() {
     echo -e "\n\033[1;34m==========================================\033[0m"
     echo -e "\033[1;32m[安全增强]\033[0m 流量已混入 $RAW_SNI 的 TLS 1.3 握手池"
     [ -n "$RAW_ARGO_DOMAIN" ] && echo -e "\033[1;32m[隧道增强]\033[0m 已启用 Cloudflare Argo 反向转发"
+	dd if=/dev/tty iflag=nonblock of=/dev/null bs=4096 2>/dev/null || true
     [ -n "$FULL_CLIP" ] && copy_to_clipboard "$FULL_CLIP"
 }
 
