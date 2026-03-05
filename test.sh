@@ -21,7 +21,7 @@ info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }; warn() { echo -e "\033[1;33m[W
 
 # 自动复制到剪贴板函数 (支持多行)
 copy_to_clipboard() {
-    local b64=$(printf "%s" "$1" | base64 | tr -d '\r\n') osc52="\033]52;c;${b64}\a"
+    local b64=$(printf "%s" "$1" | base64 | tr -d '\r\n'); local osc52="\033]52;c;${b64}\a"
     if [ -n "${TMUX:-}" ]; then printf "\ePtmux;\e%b\e\\" "$osc52"
     elif [ -n "${STY:-}" ]; then printf "\eP%b\e\\" "$osc52"
     else printf "%b" "$osc52"; fi
