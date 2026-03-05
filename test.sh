@@ -25,7 +25,7 @@ copy_to_clipboard() {
     local b64=$(echo -n "$content" | base64 | tr -d '\r\n')
     if [ -n "$TMUX" ]; then echo -ne "\033Ptmux;\033\033]52;c;${b64}\a\033\\"
     else echo -ne "\033]52;c;${b64}\a"; fi
-    echo -e "\033[1;32m[复制]\033[0m 内容已推送至剪贴板"
+	echo -e "\033[1;32m[复制]\033[0m 节点链接已推送至本地剪贴板"
 }
 
 # 侦测系统类型
