@@ -195,7 +195,6 @@ generate_cert() {
 get_network_info() {
     info "获取网络信息..."; RAW_IP4=""; RAW_IP6=""; IS_V6_OK="false"; local t4="/tmp/.v4" t6="/tmp/.v6"
     rm -f "$t4" "$t6"
-	
     # 1. 探测函数：v4 用标准接口，v6 用专用 api6 接口，在无 v6 时会秒断，在有 v6 时极稳
     _f() { local p=$1
         { curl $p -ksSfL --connect-timeout 1 --max-time 3 "https://1.1.1.1/cdn-cgi/trace" | awk -F= '/ip/ {print $2}'; } || \
@@ -812,8 +811,7 @@ start_pre() { /usr/bin/sing-box check -c /etc/sing-box/config.json >/tmp/sb_err.
 EOF
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default >/dev/null 2>&1 || true
-        sync   # 确保环境文件与服务脚本落盘，防止启动瞬时读取失败
-		(rc-service sing-box restart >/dev/null 2>&1 || true) &
+        sync; (rc-service sing-box restart >/dev/null 2>&1 || true) &
     else
         local io_config=""; local ionice_class=2; local mem_config=""; local cpu_quota=$((real_c * 100))
         [ "$io_class" = "realtime" ] && ionice_class=1
@@ -866,15 +864,16 @@ EOF
     done
     # 异步补课逻辑。在进程确认拉起后，从脚本主体执行一次优化，这样既保证了优化生效，又不会因为优化脚本运行时间长而导致服务启动超时
     ([ -f "$SBOX_CORE" ] && /bin/bash "$SBOX_CORE" --apply-cwnd) >/dev/null 2>&1 &
-	
 	# 双进程外部 Argo 拉起逻辑
 	if [ "${USE_EXTERNAL_ARGO:-false}" = "true" ] && [ -n "${ARGO_TOKEN:-}" ]; then
 	    pkill -9 cloudflared >/dev/null 2>&1 || true
 	    local cf_memlimit; [ "${mem_total:-64}" -ge 256 ] && cf_memlimit="80MiB" || cf_memlimit="50MiB"
-		local cf_cmd="GOGC=80 GOMEMLIMIT=${cf_memlimit} GOMAXPROCS=${CPU_CORE:-1} TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token ${ARGO_TOKEN} >/dev/null 2>&1"
-	    { [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1; } || true
-	    (crontab -l 2>/dev/null | grep -v cloudflared; echo "* * * * * pgrep cloudflared >/dev/null || $cf_cmd &") | crontab -
-	    sh -c "$cf_cmd" &
+	    printf '#!/bin/sh\npgrep -x cloudflared >/dev/null 2>&1 && exit 0\nGOGC=80 GOMEMLIMIT=%s GOMAXPROCS=%s TUNNEL_POST_QUANTUM=false nohup /usr/local/bin/cloudflared tunnel --protocol http2 --http2-origin --edge-ip-version auto --no-autoupdate --heartbeat-interval 5s --heartbeat-count 5 run --token %s >/dev/null 2>&1 &\n' \
+	        "$cf_memlimit" "${CPU_CORE:-1}" "${ARGO_TOKEN}" > /usr/local/bin/argo-guard
+	    chmod +x /usr/local/bin/argo-guard
+	    [ "$OS" = "alpine" ] && rc-service crond start >/dev/null 2>&1 || systemctl start crond cron >/dev/null 2>&1 || true
+	    (crontab -l 2>/dev/null | grep -v argo-guard; echo "* * * * * /usr/local/bin/argo-guard") | crontab -
+	    /usr/local/bin/argo-guard
 	fi
     if [ -n "$pid" ] && [ -e "/proc/$pid" ]; then
         local ma=$(awk '/^MemAvailable:/{a=$2;f=1} /^MemFree:|Buffers:|Cached:/{s+=$2} END{print (f?a:s)}' /proc/meminfo 2>/dev/null)
@@ -1060,18 +1059,19 @@ while true; do
         4) source "$SBOX_CORE" --update-kernel; read -r -p $'\n按回车键返回菜单...' ;;
         5) service_ctrl restart && info "系统服务和优化参数已重载"; read -r -p $'\n按回车键返回菜单...' ;;
 		6) read -r -p "是否确定卸载？(默认N) [y/N]: " cf
-           if [[ "${cf,,}" == "y" ]]; then
-               info "正在执行深度卸载..."
-               [ -f /etc/sing-box/config.json ] && RAW_PORT=$(grep '"listen_port":' /etc/sing-box/config.json | sed 's/[^0-9]//g')
-               systemctl disable --now sing-box zram-swap 2>/dev/null; rc-service sing-box stop 2>/dev/null
-               rm -rf /etc/sing-box /usr/bin/sing-box /usr/local/bin/{sb,SB,zram-swap} /etc/systemd/system/{sing-box,zram-swap}.service /etc/init.d/{sing-box,zram-swap} /etc/sysctl.d/99-sing-box.conf /tmp/sb_* ~/.acme.sh /swapfile
-               [ -n "$RAW_PORT" ] && command -v iptables >/dev/null && { iptables -D INPUT -p udp --dport "$RAW_PORT" -j ACCEPT 2>/dev/null; ip6tables -D INPUT -p udp --dport "$RAW_PORT" -j ACCEPT 2>/dev/null; }
-               sed -i '/net.ipv4.ip_forward/c\net.ipv4.ip_forward = 0' /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.ip_forward = 0" >> /etc/sysctl.conf
-               sed -i '/net.ipv6.conf.all.forwarding/c\net.ipv6.conf.all.forwarding = 0' /etc/sysctl.conf 2>/dev/null || echo "net.ipv6.conf.all.forwarding = 0" >> /etc/sysctl.conf
-               sed -i '/vm.swappiness/c\vm.swappiness = 60' /etc/sysctl.conf 2>/dev/null || echo "vm.swappiness = 60" >> /etc/sysctl.conf
-               sed -i '/swapfile/d' /etc/fstab; crontab -l 2>/dev/null | grep -v "acme.sh" | crontab - 2>/dev/null
-               sysctl --system >/dev/null 2>&1; systemctl daemon-reload 2>/dev/null; succ "深度卸载完成，系统环境已重置"; exit 0
-           else info "卸载操作已取消"; read -r -p "按回车键返回菜单..."; fi ;;
+		   if [[ "${cf,,}" == "y" ]]; then
+		       info "正在执行深度卸载..."
+		       [ -f /etc/sing-box/config.json ] && RAW_PORT=$(grep '"listen_port":' /etc/sing-box/config.json | sed 's/[^0-9]//g')
+		       systemctl disable --now sing-box zram-swap 2>/dev/null; rc-service sing-box stop 2>/dev/null
+		       pkill -9 cloudflared 2>/dev/null || true
+		       rm -rf /etc/sing-box /usr/bin/sing-box /usr/local/bin/{sb,SB,zram-swap,argo-guard,cloudflared} /etc/systemd/system/{sing-box,zram-swap}.service /etc/init.d/{sing-box,zram-swap} /etc/sysctl.d/99-sing-box.conf /tmp/sb_* ~/.acme.sh /swapfile
+		       [ -n "$RAW_PORT" ] && command -v iptables >/dev/null && { iptables -D INPUT -p udp --dport "$RAW_PORT" -j ACCEPT 2>/dev/null; ip6tables -D INPUT -p udp --dport "$RAW_PORT" -j ACCEPT 2>/dev/null; }
+		       sed -i '/net.ipv4.ip_forward/c\net.ipv4.ip_forward = 0' /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.ip_forward = 0" >> /etc/sysctl.conf
+		       sed -i '/net.ipv6.conf.all.forwarding/c\net.ipv6.conf.all.forwarding = 0' /etc/sysctl.conf 2>/dev/null || echo "net.ipv6.conf.all.forwarding = 0" >> /etc/sysctl.conf
+		       sed -i '/vm.swappiness/c\vm.swappiness = 60' /etc/sysctl.conf 2>/dev/null || echo "vm.swappiness = 60" >> /etc/sysctl.conf
+		       sed -i '/swapfile/d' /etc/fstab; crontab -l 2>/dev/null | grep -v -e "acme.sh" -e "argo-guard" | crontab - 2>/dev/null
+		       sysctl --system >/dev/null 2>&1; systemctl daemon-reload 2>/dev/null; succ "深度卸载完成，系统环境已重置"; exit 0
+		   else info "卸载操作已取消"; read -r -p "按回车键返回菜单..."; fi ;;
         0) exit 0 ;;
     esac
 done
