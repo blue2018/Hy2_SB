@@ -341,27 +341,27 @@ EOF
 # 动态 RTT 内存页钳位
 safe_rtt() {
     local dyn_buf="$1" rtt_val="$2" max_udp_pages="$3" udp_min="$4" udp_pre="$5" udp_max="$6" real_rtt_factors="$7" loss_compensation="$8"
-    local bw="${VAR_HY2_BW:-200}" fn=10 pr=82 mn=60 s_pre s_min scaled
-    # 1. BDP 建模 (Mbps * 125000 / 4096 * RTT/1000 * 修正系数3)
+    local bw="${VAR_HY2_BW:-200}" fn_x10=100 pr=82 mn=60 s_pre s_min scaled
+    # 1. BDP 建模：real_rtt_factors 含100ms端到端补偿 × 修正系数3
     local bdp_pages=$(( bw * 375 * real_rtt_factors / 4096 )); [ "$bdp_pages" -lt 512 ] && bdp_pages=512
     local dyn_pages=$(( dyn_buf / 4096 )); local base=$(( bdp_pages > dyn_pages ? bdp_pages : dyn_pages ))
-    # 2. 分段线性补偿系数 (fn: 10~16)
-    if [ "$rtt_val" -le 80 ]; then fn=10; elif [ "$rtt_val" -le 150 ]; then fn=$(( 10 + (rtt_val - 80) * 3 / 70 ))
-    elif [ "$rtt_val" -le 300 ]; then fn=$(( 13 + (rtt_val - 150) * 3 / 150 )); else fn=16; fi
-    [ "$max_udp_pages" -lt 16384 ] && [ "$fn" -gt 13 ] && fn=13
-    scaled=$(( base * fn / 10 ))
-    # 3. 动态梯度计算 (pr: Pressure, mn: Min)
+    # 2. 分段线性补偿系数 ×10定点运算 (fn_x10: 100~160，消除整数截断)
+    if [ "$rtt_val" -le 80 ]; then fn_x10=100
+    elif [ "$rtt_val" -le 150 ]; then fn_x10=$(( 100 + (rtt_val - 80) * 30 / 70 ))
+    elif [ "$rtt_val" -le 300 ]; then fn_x10=$(( 130 + (rtt_val - 150) * 30 / 150 ))
+    else fn_x10=160; fi
+    [ "$max_udp_pages" -lt 16384 ] && [ "$fn_x10" -gt 130 ] && fn_x10=130
+    scaled=$(( base * fn_x10 / 100 ))
+    # 3. 动态梯度计算
     local loss_pct=$(( (loss_compensation - 100) / 5 )); pr=$(( 82 - loss_pct )); mn=$(( 60 - loss_pct * 2 ))
-    [ "$pr" -lt 68 ] && pr=68; [ "$pr" -gt 82 ] && pr=82; [ "$mn" -lt 38 ] && mn=38; [ "$mn" -gt 60 ] && mn=60
-    # 4. 物理上限钳位
-    [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages
-    [ "$scaled" -gt "$udp_max" ] && scaled=$udp_max
-	local scaled_min=$(( udp_min * 100 / mn )); [ "$scaled" -lt "$scaled_min" ] && scaled=$scaled_min
+    [ "$pr" -lt 60 ] && pr=60; [ "$pr" -gt 82 ] && pr=82; [ "$mn" -lt 30 ] && mn=30; [ "$mn" -gt 60 ] && mn=60
+    # 4. 物理上限双钳位
+    [ "$scaled" -gt "$max_udp_pages" ] && scaled=$max_udp_pages; [ "$scaled" -gt "$udp_max" ] && scaled=$udp_max
+    local scaled_min=$(( udp_min * 100 / mn )); [ "$scaled" -lt "$scaled_min" ] && scaled=$scaled_min
     s_pre=$(( scaled * pr / 100 )); s_min=$(( scaled * mn / 100 ))
-    # 5. 一致性与边界保底 (确保参数合法性)
-    [ "$s_min" -lt 64 ] && s_min=64
-    [ "$s_pre" -le "$s_min" ] && s_pre=$(( s_min + 64 ))
-    [ "$scaled" -le "$s_pre" ] && scaled=$(( s_pre + 64 ))
+    # 5. 一致性与边界保底
+    [ "$s_min" -lt 64 ] && s_min=64; [ "$s_pre" -lt "$udp_pre" ] && s_pre=$udp_pre
+    [ "$s_pre" -le "$s_min" ] && s_pre=$(( s_min + 64 )); [ "$scaled" -le "$s_pre" ] && scaled=$(( s_pre + 64 ))
     # 6. 全局变量精确导出
     RTT_SCALE_MAX=$scaled; RTT_SCALE_PRESSURE=$s_pre; RTT_SCALE_MIN=$s_min
     if [ "$rtt_val" -le 80 ]; then SBOX_OPTIMIZE_LEVEL="${SBOX_OPTIMIZE_LEVEL} (QUIC竞速)"
