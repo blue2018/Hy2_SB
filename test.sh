@@ -21,10 +21,10 @@ info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }; warn() { echo -e "\033[1;33m[W
 
 # 自动复制到剪贴板函数 (支持多行)
 copy_to_clipboard() {
-    local content="$1"; [ -z "$content" ] && return
+    local content="${1:-}"; [ -z "$content" ] && return
     local b64=$(echo -n "$content" | base64 | tr -d '\r\n')
-    if [ -z "${TMUX:-}" ]; then echo -ne "\033]52;c;${b64}\a"
-    else echo -ne "\033Ptmux;\033\033]52;c;${b64}\a\033\\"; fi
+    if [ -n "${TMUX:-}" ]; then echo -ne "\033Ptmux;\033\033]52;c;${b64}\a\033\\"
+    else echo -ne "\033]52;c;${b64}\a"; fi
     echo -e "\033[1;32m[复制]\033[0m 节点链接已推送至本地剪贴板"
 }
 
